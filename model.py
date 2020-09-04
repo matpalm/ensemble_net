@@ -27,7 +27,7 @@ def _conv_layer(stride, activation, inp, kernel, bias):
     return block
 
 
-def _dense_layer(inp, activation, kernel, bias):
+def _dense_layer(activation, inp, kernel, bias):
     block = jnp.dot(inp, kernel) + bias
     if activation:
         block = activation(block)
@@ -76,12 +76,12 @@ class NonEnsembleNet(objax.Module):
         y = jnp.mean(y, axis=(1, 2))
 
         # dense layer with non linearity -> (B, 32)
-        y = _dense_layer(y, gelu, self.dense_kernel.value,
+        y = _dense_layer(gelu, y, self.dense_kernel.value,
                          self.dense_bias.value)
 
         # dense layer with no activation to number classes -> (B, num_classes)
         logits = _dense_layer(
-            y, None, self.logits_kernel.value, self.logits_bias.value)
+            None, y, self.logits_kernel.value, self.logits_bias.value)
 
         return logits
 
