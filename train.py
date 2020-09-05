@@ -5,9 +5,29 @@ import objax
 from objax.functional.loss import cross_entropy_logits_sparse
 from tqdm import tqdm
 import util
+import wandb
+import sys
+import datetime
 
 
 def train(opts):
+    # init w & b
+    wandb_enabled = opts.group is not None
+    if wandb_enabled:
+        if opts.run is None:
+            run = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        else:
+            run = opts.run
+        wandb.init(project='ensemble_net',
+                   group=opts.group, name=run,
+                   reinit=True)
+        # wandb.config.num_models = opts.num_models
+        wandb.config.dense_kernel_size = opts.dense_kernel_size
+        wandb.config.seed = opts.seed
+        wandb.config.learning_rate = opts.learning_rate
+        wandb.config.batch_size = opts.batch_size
+    else:
+        print("not using wandb", file=sys.stderr)
 
     # construct model
     net = model.NonEnsembleNet(num_classes=10,
@@ -30,24 +50,30 @@ def train(opts):
                            gradient_loss.vars() + optimiser.vars())
 
     # reate jitted call for validation loss
-    validate_loss = objax.Jit(cross_entropy, net.vars())
+    calculate_validation_loss = objax.Jit(cross_entropy, net.vars())
 
     # read entire validation set
     validation_imgs, validation_labels = data.dataset('validate')
 
     # run some epoches of training
     early_stopping = util.EarlyStopping()
-    for e in tqdm(range(opts.epochs)):
+    for epoches in tqdm(range(opts.epochs)):
         # make one pass through training set
         train_ds = data.dataset('train', batch_size=opts.batch_size)
         for imgs, labels in train_ds:
             train_step(imgs, labels)
-        # check validation loss
-        validation_loss = validate_loss(validation_imgs, validation_labels)
+        # check validation loss and early stopping
+        validation_loss = float(calculate_validation_loss(validation_imgs,
+                                                          validation_labels))
         if early_stopping.should_stop(validation_loss):
             break
-        # print(e, "validate loss", validation_loss)
 
+    # close out wandb run
+    if wandb_enabled:
+        wandb.log({'validation_loss': validation_loss}, step=epoches)
+        wandb.join()
+
+    # return validation loss to ax
     return validation_loss
 
 
@@ -57,17 +83,15 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    # parser.add_argument('--group', type=str,
-    #                     help='w&b init group', default=None)
-    # parser.add_argument('--run', type=str,
-    #                     help='w&b init run', default=None)
+    parser.add_argument('--group', type=str,
+                        help='w&b init group', default=None)
+    parser.add_argument('--run', type=str,
+                        help='w&b init run', default=None)
     parser.add_argument('--seed', type=int, default=0)
     # parser.add_argument('--num-models', type=int, default=20)
     parser.add_argument('--dense-kernel-size', type=int, default=16)
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--learning-rate', type=float, default=1e-3)
-    # parser.add_argument('--ortho-init', type=str, default='True')
-    # parser.add_argument('--logit-temp', type=float, default=0.1)
     parser.add_argument('--epochs', type=int, default=2)
     opts = parser.parse_args()
     print(opts, file=sys.stderr)

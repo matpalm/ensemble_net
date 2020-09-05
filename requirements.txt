@@ -1,2 +1,6 @@
 tensorflow-gpu
 tensorflow-datasets
+jax
+objax
+wandb
+ax-platform

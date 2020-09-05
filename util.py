@@ -1,3 +1,15 @@
+import os
+
+
+def ensure_dir_exists(directory):
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+
+def ensure_dir_exists_for_file(fname):
+    ensure_dir_exists(os.path.dirname(fname))
+
+
 class EarlyStopping(object):
     def __init__(self, patience=3, burn_in=3):
         self.original_patience = patience
