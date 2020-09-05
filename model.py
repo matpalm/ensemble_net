@@ -51,8 +51,8 @@ class NonEnsembleNet(objax.Module):
         self.conv_biases = objax.ModuleList()
         input_channels = 3
         for i, output_channels in enumerate([32, 64, 64, 64]):
-            self.conv_kernels.append(TrainVar(he_normal()(subkeys[i], (3, 3, input_channels,
-                                                                       output_channels))))
+            self.conv_kernels.append(TrainVar(he_normal()(
+                subkeys[i], (3, 3, input_channels, output_channels))))
             self.conv_biases.append(TrainVar(jnp.zeros((output_channels))))
             input_channels = output_channels
 
