@@ -3,6 +3,8 @@ import model
 import jax.numpy as jnp
 import objax
 from objax.functional.loss import cross_entropy_logits_sparse
+from tqdm import tqdm
+import util
 
 
 def train(opts):
@@ -30,18 +32,23 @@ def train(opts):
     # reate jitted call for validation loss
     validate_loss = objax.Jit(cross_entropy, net.vars())
 
+    # read entire validation set
+    validation_imgs, validation_labels = data.dataset('validate')
+
     # run some epoches of training
-    for e in range(opts.epochs):
+    early_stopping = util.EarlyStopping()
+    for e in tqdm(range(opts.epochs)):
+        # make one pass through training set
         train_ds = data.dataset('train', batch_size=opts.batch_size)
         for imgs, labels in train_ds:
-            # TODO: use tqdn
-            #print("T", e, step, imgs.shape, labels.shape)
             train_step(imgs, labels)
+        # check validation loss
+        validation_loss = validate_loss(validation_imgs, validation_labels)
+        if early_stopping.should_stop(validation_loss):
+            break
+        # print(e, "validate loss", validation_loss)
 
-        imgs, labels = data.dataset('validate')
-        #print("V", e, imgs.shape, labels.shape)
-        # TODO: jit this call ?
-        print(e, "validate loss", len(labels), validate_loss(imgs, labels))
+    return validation_loss
 
 
 if __name__ == '__main__':
