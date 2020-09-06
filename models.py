@@ -67,6 +67,13 @@ class NonEnsembleNet(objax.Module):
         self.logits_bias = TrainVar(jnp.zeros((num_classes)))
 
     def logits(self, inp):
+        """return logits over inputs
+        Args:
+          inp: input images  (B, HW, HW, 3)
+        Returns:
+          logit values for input images  (B, C)
+        """
+
         # conv stack -> (B, 3, 3, 256)
         y = inp
         for kernel, bias in zip(self.conv_kernels, self.conv_biases):
@@ -85,5 +92,140 @@ class NonEnsembleNet(objax.Module):
 
         return logits
 
+    def predict_proba(self, inp):
+        """return prediction probabilities. i.e. softmax over logits.
+        Args:
+          inp: input images  (B, HW, HW, 3)
+        Returns:
+          softmax values for input images  (B, C)
+        """
+        return jax.nn.softmax(self.logits(inp), axis=-1)
+
     def predict(self, inp):
-        return jax.nn.softmax(self.logits(inp))
+        """return class predictions. i.e. argmax over logits.
+        Args:
+          inp: input images  (B, HW, HW, 3)
+        Returns:
+          prediction classes for input images  (B,)
+        """
+        return jnp.argmax(self.logits(inp), axis=-1)
+
+
+class EnsembleNet(objax.Module):
+
+    def __init__(self, num_models, num_classes, dense_kernel_size=32, seed=0):
+
+        key = random.PRNGKey(seed)
+        subkeys = random.split(key, 8)
+
+        self.num_models = num_models
+
+        # conv stack kernels and biases
+        self.conv_kernels = objax.ModuleList()
+        self.conv_biases = objax.ModuleList()
+        input_channels = 3
+        for i, output_channels in enumerate([32, 64, 64, 64]):
+            self.conv_kernels.append(TrainVar(he_normal()(
+                subkeys[i], (num_models, 3, 3, input_channels,
+                             output_channels))))
+            self.conv_biases.append(
+                TrainVar(jnp.zeros((num_models, output_channels))))
+            input_channels = output_channels
+
+        # dense layer kernel and bias
+        self.dense_kernel = TrainVar(he_normal()(
+            subkeys[6], (num_models, output_channels, dense_kernel_size)))
+        self.dense_bias = TrainVar(jnp.zeros((num_models, dense_kernel_size)))
+
+        # classifier layer kernel and bias
+        self.logits_kernel = TrainVar(glorot_normal()(
+            subkeys[6], (num_models, dense_kernel_size, num_classes)))
+        self.logits_bias = TrainVar(jnp.zeros((num_models, num_classes)))
+
+    def logits(self, inp, single_result):
+        """return logits over inputs.
+        Args:
+          inp: input images. either (B, HW, HW, 3) or (M, B, HW, HW, 3)
+          single_result: if true then logits are summed to return one value over
+            all models.
+        Returns:
+          logit values for input images. either (B, C) if single_result is True
+          or (M, B, C) if single_result is False.
+        Raises:
+          Exception: if input images are (M, B, HW, HW, 3) and
+                     single_result==True.
+        """
+
+        if len(inp.shape) == 4:
+            # inp (B, HW, HW, 3)
+            # apply first convolution as vmap against just inp
+            y = vmap(partial(_conv_layer, 2, gelu, inp))(
+                self.conv_kernels[0].value, self.conv_biases[0].value)
+        elif len(inp.shape) == 5:
+            if single_result:
+                raise Exception("single_result=True not valid when passed an"
+                                " image per model")
+            # inp (M, B, HW, HW, 3)
+            # apply all convolutions, including first, as vmap against both y
+            # and kernel, bias
+            y = vmap(partial(_conv_layer, 2, gelu))(
+                inp, self.conv_kernels[0].value, self.conv_biases[0].value)
+
+        # y now (M, B, HW/2 HW/2, 32)
+
+        # rest of the convolution stack can be applied as vmap against both y
+        # and conv kernels, biases. final result is (M, B, 3, 3, 64)
+        for kernel, bias in zip(self.conv_kernels[1:], self.conv_biases[1:]):
+            y = vmap(partial(_conv_layer, 2, gelu))(
+                y, kernel.value, bias.value)
+
+        # global spatial pooling. (M, B, 64)
+        y = jnp.mean(y, axis=(2, 3))
+
+        # dense layer with non linearity. (M, B, 32)
+        y = vmap(partial(_dense_layer, gelu))(
+            y, self.dense_kernel.value, self.dense_bias.value)
+
+        # dense layer with no activation to number classes.
+        # (M, B, num_classes)
+        logits = vmap(partial(_dense_layer, None))(
+            y, self.logits_kernel.value, self.logits_bias.value)
+
+        if single_result:
+            # sum logits over models to represent single ensemble result
+            # (B, num_classes)
+            logits = jnp.sum(logits, axis=0)
+
+        return logits
+
+    def predict_proba(self, inp, single_result):
+        """return prediction probabilities. i.e. softmax over logits.
+        Args:
+          inp: input images. either (B, HW, HW, 3) or (M, B, HW, HW, 3)
+          single_result: if true then logits are summed to return one value over
+            all models.
+        Returns:
+          logit values for input images. either (B, C) if single_result is True
+          or (M, B, C) if single_result is False.
+        Raises:
+          Exception: if input images are (M, B, HW, HW, 3) and
+                     single_result==True.
+        """
+
+        return jax.nn.softmax(self.logits(inp, single_result), axis=-1)
+
+    def predict(self, inp, single_result):
+        """return class predictions. i.e. argmax over logits.
+        Args:
+          inp: input images. either (B, HW, HW, 3) or (M, B, HW, HW, 3)
+          single_result: if true then logits are summed to return one value over
+            all models.
+        Returns:
+          logit values for input images. either (B, C) if single_result is True
+          or (M, B, C) if single_result is False.
+        Raises:
+          Exception: if input images are (M, B, HW, HW, 3) and
+                     single_result==True.
+        """
+
+        return jnp.argmax(self.logits(inp, single_result), axis=-1)

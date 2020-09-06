@@ -1,5 +1,5 @@
 import data
-import model
+import models
 import jax.numpy as jnp
 import objax
 from objax.functional.loss import cross_entropy_logits_sparse
@@ -30,9 +30,9 @@ def train(opts):
         print("not using wandb", file=sys.stderr)
 
     # construct model
-    net = model.NonEnsembleNet(num_classes=10,
-                               dense_kernel_size=opts.dense_kernel_size,
-                               seed=opts.seed)
+    net = models.NonEnsembleNet(num_classes=10,
+                                dense_kernel_size=opts.dense_kernel_size,
+                                seed=opts.seed)
 
     # setup loss fn and optimiser
     def cross_entropy(imgs, labels):
