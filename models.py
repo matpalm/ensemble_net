@@ -50,7 +50,7 @@ class NonEnsembleNet(objax.Module):
         self.conv_kernels = objax.ModuleList()
         self.conv_biases = objax.ModuleList()
         input_channels = 3
-        for i, output_channels in enumerate([32, 64, 64, 64]):
+        for i, output_channels in enumerate([32, 64, 128, 256]):
             self.conv_kernels.append(TrainVar(he_normal()(
                 subkeys[i], (3, 3, input_channels, output_channels))))
             self.conv_biases.append(TrainVar(jnp.zeros((output_channels))))
@@ -67,19 +67,19 @@ class NonEnsembleNet(objax.Module):
         self.logits_bias = TrainVar(jnp.zeros((num_classes)))
 
     def logits(self, inp):
-        # conv stack -> (B, 3, 3, 64)
+        # conv stack -> (B, 3, 3, 256)
         y = inp
         for kernel, bias in zip(self.conv_kernels, self.conv_biases):
             y = _conv_layer(2, gelu, y, kernel.value, bias.value)
 
-        # global spatial pooling -> (B, 64)
+        # global spatial pooling -> (B, 256)
         y = jnp.mean(y, axis=(1, 2))
 
-        # dense layer with non linearity -> (B, 32)
+        # dense layer with non linearity -> (B, DKS)
         y = _dense_layer(gelu, y, self.dense_kernel.value,
                          self.dense_bias.value)
 
-        # dense layer with no activation to number classes -> (B, num_classes)
+        # dense layer with no activation to number classes -> (B, C)
         logits = _dense_layer(
             None, y, self.logits_kernel.value, self.logits_bias.value)
 
