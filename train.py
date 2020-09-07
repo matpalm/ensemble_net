@@ -8,6 +8,7 @@ import util
 import wandb
 import sys
 import datetime
+import util
 
 
 def train(opts):
@@ -21,7 +22,7 @@ def train(opts):
         wandb.init(project='ensemble_net',
                    group=opts.group, name=run,
                    reinit=True)
-        # wandb.config.num_models = opts.num_models
+        wandb.config.num_models = opts.num_models
         wandb.config.dense_kernel_size = opts.dense_kernel_size
         wandb.config.seed = opts.seed
         wandb.config.learning_rate = opts.learning_rate
@@ -30,9 +31,16 @@ def train(opts):
         print("not using wandb", file=sys.stderr)
 
     # construct model
-    net = models.NonEnsembleNet(num_classes=10,
-                                dense_kernel_size=opts.dense_kernel_size,
-                                seed=opts.seed)
+    if opts.num_models == 1:
+        net = models.NonEnsembleNet(num_classes=10,
+                                    dense_kernel_size=opts.dense_kernel_size,
+                                    seed=opts.seed)
+    else:
+        net = models.EnsembleNet(num_models=opts.num_models,
+                                 num_classes=10,
+                                 dense_kernel_size=opts.dense_kernel_size,
+                                 seed=opts.seed)
+        net.single_result = True
 
     # setup loss fn and optimiser
     def cross_entropy(imgs, labels):
@@ -68,10 +76,19 @@ def train(opts):
         if early_stopping.should_stop(validation_loss):
             break
 
+    # final validation metrics
+    validation_accuracy = util.accuracy(net.predict(validation_imgs),
+                                        validation_labels)
+
     # close out wandb run
     if wandb_enabled:
-        wandb.log({'validation_loss': validation_loss}, step=epoches)
+        wandb.log({'validation_loss': validation_loss,
+                   'validation_accuracy': validation_accuracy},
+                  step=epoches)
         wandb.join()
+    else:
+        print("final validation_loss", validation_loss)
+        print("final validation accuracy", validation_accuracy)
 
     # return validation loss to ax
     return validation_loss
@@ -88,7 +105,7 @@ if __name__ == '__main__':
     parser.add_argument('--run', type=str,
                         help='w&b init run', default=None)
     parser.add_argument('--seed', type=int, default=0)
-    # parser.add_argument('--num-models', type=int, default=20)
+    parser.add_argument('--num-models', type=int, default=1)
     parser.add_argument('--dense-kernel-size', type=int, default=16)
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--learning-rate', type=float, default=1e-3)

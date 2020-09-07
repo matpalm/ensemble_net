@@ -20,9 +20,13 @@ def entire_split(ds_split):
 def dataset(split, batch_size=16):
     if split == 'train':  # 21600 records
         ds_split = 'train[:80%]'
-    elif split == 'validate':  # 2700 records
+    elif split == 'validate':
+        # 2700 records
+        # [293, 307, 335, 258, 253, 194, 239, 284, 243, 294]
         ds_split = 'train[80%:90%]'
-    elif split == 'test':  # 2700 records
+    elif split == 'test':
+        # 2700 records
+        # [307, 300, 296, 221, 262, 216, 251, 296, 250, 301]
         ds_split = 'train[90%:]'
     else:
         raise Exception("unexpected split", split)

@@ -33,16 +33,10 @@ def _dense_layer(activation, inp, kernel, bias):
         block = activation(block)
     return block
 
-# def _conv_block_without_bias(stride, with_non_linearity, inp, kernel):
-#     # the need for this method feels a bit clunky :/ is there a better
-#     # way to vmap with the None?
-#     return _conv_block(stride, with_non_linearity, inp, kernel, None)
-
 
 class NonEnsembleNet(objax.Module):
 
     def __init__(self, num_classes, dense_kernel_size=32, seed=0):
-
         key = random.PRNGKey(seed)
         subkeys = random.split(key, 8)
 
@@ -114,12 +108,11 @@ class NonEnsembleNet(objax.Module):
 class EnsembleNet(objax.Module):
 
     def __init__(self, num_models, num_classes, dense_kernel_size=32, seed=0):
+        self.num_models = num_models
+        self.single_result = True
 
         key = random.PRNGKey(seed)
         subkeys = random.split(key, 8)
-
-        self.num_models = num_models
-        self.single_result = True
 
         # conv stack kernels and biases
         self.conv_kernels = objax.ModuleList()

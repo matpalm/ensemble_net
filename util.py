@@ -1,4 +1,5 @@
 import os
+import numpy as np
 
 
 def ensure_dir_exists(directory):
@@ -47,3 +48,9 @@ class EarlyStopping(object):
             return True
         else:
             return False
+
+
+def accuracy(predictions, labels):
+    num_correct = np.equal(predictions, labels).sum()
+    num_total = len(predictions)
+    return num_correct / num_total

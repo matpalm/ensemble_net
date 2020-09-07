@@ -21,11 +21,11 @@ ax = AxClient()
 ax.create_experiment(
     name="ensemble_net_tuning",
     parameters=[
-        # {
-        #     "name": "num_models",
-        #     "type": "range",
-        #     "bounds": [5, 20],
-        # },
+        {
+            "name": "num_models",
+            "type": "choice",
+            "values": [1, 4, 8],
+        },
         {
             "name": "dense_kernel_size",
             "type": "range",
@@ -69,7 +69,7 @@ while True:
     opts.group = cmd_line_opts.group
     opts.run = None
     opts.seed = random.randint(0, 1e9)
-    # opts.num_models = 20  # parameters['num_models']
+    opts.num_models = parameters['num_models']
     opts.dense_kernel_size = parameters['dense_kernel_size']
     opts.batch_size = parameters['batch_size']
     opts.learning_rate = parameters['learning_rate']
