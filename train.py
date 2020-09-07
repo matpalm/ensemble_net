@@ -12,13 +12,15 @@ import util
 
 
 def train(opts):
+
+    if opts.run is None:
+        run = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    else:
+        run = opts.run
+
     # init w & b
     wandb_enabled = opts.group is not None
     if wandb_enabled:
-        if opts.run is None:
-            run = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        else:
-            run = opts.run
         wandb.init(project='ensemble_net',
                    group=opts.group, name=run,
                    reinit=True)
@@ -75,6 +77,16 @@ def train(opts):
                                                           validation_labels))
         if early_stopping.should_stop(validation_loss):
             break
+
+    # save model
+    # TODO: in early stopping case we can save the prior checkpoint with the
+    #       best performance
+    model_save_file = "saved_models/"
+    if opts.group:
+        model_save_file += f"{opts.group}/"
+    model_save_file += f"{run}/final.npz"
+    util.ensure_dir_exists_for_file(model_save_file)
+    objax.io.save_var_collection(model_save_file, net.vars())
 
     # final validation metrics
     validation_accuracy = util.accuracy(net.predict(validation_imgs),
