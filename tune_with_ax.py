@@ -40,7 +40,7 @@ ax.create_experiment(
         {
             "name": "batch_size",
             "type": "choice",
-            "values": [32, 64, 128, 256],
+            "values": [32, 64, 128],
         },
     ],
     objective_name="final_loss",
@@ -53,7 +53,7 @@ ax.create_experiment(
 
 u.ensure_dir_exists("logs/%s" % cmd_line_opts.group)
 log = open("logs/%s/ax_trials.tsv" % cmd_line_opts.group, "w")
-print("trial_index\tparameters\truntime\ttest_score", file=log)
+print("trial_index\tparameters\truntime\tfinal_loss", file=log)
 
 
 while True:
@@ -67,7 +67,6 @@ while True:
 
     # fixed opts
     opts.group = cmd_line_opts.group
-    opts.run = None
     opts.seed = random.randint(0, 1e9)
     opts.num_models = parameters['num_models']
     opts.dense_kernel_size = parameters['dense_kernel_size']

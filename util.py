@@ -1,5 +1,10 @@
 import os
 import numpy as np
+import datetime
+
+
+def DTS():
+    return datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
 
 
 def ensure_dir_exists(directory):

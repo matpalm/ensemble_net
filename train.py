@@ -7,22 +7,17 @@ from tqdm import tqdm
 import util
 import wandb
 import sys
-import datetime
 import util
 
 
 def train(opts):
 
-    if opts.run is None:
-        run = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    else:
-        run = opts.run
+    run = util.DTS()
 
     # init w & b
     wandb_enabled = opts.group is not None
     if wandb_enabled:
-        wandb.init(project='ensemble_net',
-                   group=opts.group, name=run,
+        wandb.init(project='ensemble_net', group=opts.group, name=run,
                    reinit=True)
         wandb.config.num_models = opts.num_models
         wandb.config.dense_kernel_size = opts.dense_kernel_size
@@ -114,8 +109,6 @@ if __name__ == '__main__':
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--group', type=str,
                         help='w&b init group', default=None)
-    parser.add_argument('--run', type=str,
-                        help='w&b init run', default=None)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--num-models', type=int, default=1)
     parser.add_argument('--dense-kernel-size', type=int, default=16)
