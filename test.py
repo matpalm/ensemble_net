@@ -29,8 +29,11 @@ else:
                              seed=0)
 objax.io.load_var_collection(opts.saved_model, net.vars())
 
-# read entire test set
-imgs, labels = data.dataset(opts.split)
+# read entire dataset
+if opts.split == 'validate':
+    imgs, labels = data.validation_dataset()
+else:
+    imgs, labels = data.test_dataset()
 
 # final validation metrics
 accuracy = util.accuracy(net.predict(imgs), labels)

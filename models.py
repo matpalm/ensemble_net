@@ -60,7 +60,7 @@ class NonEnsembleNet(objax.Module):
             subkeys[6], (dense_kernel_size, num_classes)))
         self.logits_bias = TrainVar(jnp.zeros((num_classes)))
 
-    def logits(self, inp):
+    def logits(self, inp, single_result):
         """return logits over inputs
         Args:
           inp: input images  (B, HW, HW, 3)
@@ -86,30 +86,29 @@ class NonEnsembleNet(objax.Module):
 
         return logits
 
-    def predict_proba(self, inp):
+    def predict_proba(self, inp, single_result):
         """return prediction probabilities. i.e. softmax over logits.
         Args:
           inp: input images  (B, HW, HW, 3)
         Returns:
           softmax values for input images  (B, C)
         """
-        return jax.nn.softmax(self.logits(inp), axis=-1)
+        return jax.nn.softmax(self.logits(inp, single_result), axis=-1)
 
-    def predict(self, inp):
+    def predict(self, inp, single_result):
         """return class predictions. i.e. argmax over logits.
         Args:
           inp: input images  (B, HW, HW, 3)
         Returns:
           prediction classes for input images  (B,)
         """
-        return jnp.argmax(self.logits(inp), axis=-1)
+        return jnp.argmax(self.logits(inp, single_result), axis=-1)
 
 
 class EnsembleNet(objax.Module):
 
     def __init__(self, num_models, num_classes, dense_kernel_size=32, seed=0):
         self.num_models = num_models
-        self.single_result = True
 
         key = random.PRNGKey(seed)
         subkeys = random.split(key, 8)
@@ -136,7 +135,7 @@ class EnsembleNet(objax.Module):
             subkeys[6], (num_models, dense_kernel_size, num_classes)))
         self.logits_bias = TrainVar(jnp.zeros((num_models, num_classes)))
 
-    def logits(self, inp):
+    def logits(self, inp, single_result):
         """return logits over inputs.
         Args:
           inp: input images. either (B, HW, HW, 3) in which case all models
@@ -156,7 +155,7 @@ class EnsembleNet(objax.Module):
             y = vmap(partial(_conv_layer, 2, gelu, inp))(
                 self.conv_kernels[0].value, self.conv_biases[0].value)
         elif len(inp.shape) == 5:
-            if self.single_result:
+            if single_result:
                 raise Exception("self.single_result=True not valid when passed"
                                 " an image per model")
             if inp.shape[0] != self.num_models:
@@ -191,14 +190,14 @@ class EnsembleNet(objax.Module):
         logits = vmap(partial(_dense_layer, None))(
             y, self.logits_kernel.value, self.logits_bias.value)
 
-        if self.single_result:
+        if single_result:
             # sum logits over models to represent single ensemble result
             # (B, num_classes)
             logits = jnp.sum(logits, axis=0)
 
         return logits
 
-    def predict_proba(self, inp):
+    def predict_proba(self, inp, single_result):
         """return prediction probabilities. i.e. softmax over logits.
         Args:
           inp: input images. either (B, HW, HW, 3) in which case all models
@@ -212,9 +211,9 @@ class EnsembleNet(objax.Module):
                      mode.
         """
 
-        return jax.nn.softmax(self.logits(inp), axis=-1)
+        return jax.nn.softmax(self.logits(inp, single_result), axis=-1)
 
-    def predict(self, inp):
+    def predict(self, inp, single_result):
         """return class predictions. i.e. argmax over logits.
         Args:
           inp: input images. either (B, HW, HW, 3) in which case all models
@@ -228,4 +227,4 @@ class EnsembleNet(objax.Module):
                      mode.
         """
 
-        return jnp.argmax(self.logits(inp), axis=-1)
+        return jnp.argmax(self.logits(inp, single_result), axis=-1)

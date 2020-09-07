@@ -12,37 +12,63 @@ parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--group', type=str, default=None,
                     help='wandb group. if none, no logging')
+parser.add_argument('--config-combo', type=str, default=None,
+                    help="one of {single_input_output,"
+                         " single_input_multiple_outputs,"
+                         " multiple_inputs_multiple_outputs")
+
 # parser.add_argument('--prior-run-logs', type=str, default=None,
 #                     help='a comma seperated prior runs to prime ax client with')
 cmd_line_opts = parser.parse_args()
+if cmd_line_opts.config_combo not in ['single_input_output',
+                                      'single_input_multiple_outputs',
+                                      'multiple_inputs_multiple_outputs']:
+    raise Exception("invalid --config-combo")
 print(cmd_line_opts, file=sys.stderr)
+
+# we tune for 3 major configuration combos; see train.py for more info.
+
+# a) --input-mode=single --num-models=1 ; single set of inputs, single model
+#    this is the baseline non ensemble config.
+#
+# b) --input-mode=single --num-models=M ; single set of inputs, multiple
+#    models single set of inputs and labels. ensemble outputs are summed at
+#    logits to produce single output.
+#
+# c) --input-mode=multiple --num-models=M ; multiple inputs, multiple models
+#    multiple inputs (with multiple labels) going through multiple models.
+#    loss is still averaged over all models though.
+
+ax_params = [
+    {
+        "name": "dense_kernel_size",
+        "type": "range",
+        "bounds": [8, 64],
+    },
+    {
+        "name": "learning_rate",
+        "type": "range",
+        "bounds": [1e-5, 1e-2],
+        "log_scale": True,
+    },
+    {
+        "name": "batch_size",
+        "type": "choice",
+        "values": [32, 64, 128],
+    },
+]
+
+if cmd_line_opts.config_combo != 'single_input_output':
+    ax_params.append({
+        "name": "num_models",
+        "type": "choice",
+        "values": [2, 4],
+    })
 
 ax = AxClient()
 ax.create_experiment(
     name="ensemble_net_tuning",
-    parameters=[
-        {
-            "name": "num_models",
-            "type": "choice",
-            "values": [1, 4, 8],
-        },
-        {
-            "name": "dense_kernel_size",
-            "type": "range",
-            "bounds": [8, 64],
-        },
-        {
-            "name": "learning_rate",
-            "type": "range",
-            "bounds": [1e-5, 1e-2],
-            "log_scale": True,
-        },
-        {
-            "name": "batch_size",
-            "type": "choice",
-            "values": [32, 64, 128],
-        },
-    ],
+    parameters=ax_params,
     objective_name="final_loss",
     minimize=True,
 )
@@ -65,10 +91,21 @@ while True:
         pass
     opts = Opts()
 
-    # fixed opts
     opts.group = cmd_line_opts.group
     opts.seed = random.randint(0, 1e9)
-    opts.num_models = parameters['num_models']
+
+    # TODO: consider just making input_mode a tunable independent of
+    #       num_models and just training loop mark the combo as infeasible.
+    if cmd_line_opts.config_combo == 'single_input_output':
+        opts.input_mode = 'single'
+        opts.num_models = 1
+    elif cmd_line_opts.config_combo == 'single_input_multiple_outputs':
+        opts.input_mode = 'single'
+        opts.num_models = parameters['num_models']
+    else:  # config_combo multiple_inputs_multiple_outputs
+        opts.input_mode = 'multiple'
+        opts.num_models = parameters['num_models']
+
     opts.dense_kernel_size = parameters['dense_kernel_size']
     opts.batch_size = parameters['batch_size']
     opts.learning_rate = parameters['learning_rate']

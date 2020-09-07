@@ -2,6 +2,8 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 from functools import lru_cache
 import numpy as np
+import jax.numpy as jnp
+from tensorflow.data.experimental import AUTOTUNE
 
 
 def _convert_dtype(x):
@@ -25,37 +27,44 @@ def _augment_and_convert_dtype(x, y):
 
 
 @lru_cache()
-def entire_split(ds_split):
+def _entire_split(ds_split):
     x, y = tfds.load('eurosat/rgb', split=ds_split, shuffle_files=False,
                      batch_size=-1, as_supervised=True)
     return np.array(_convert_dtype(x)), np.array(y)
 
 
-def dataset(split, batch_size=16):
-    if split == 'train':  # 21600 records
-        ds_split = 'train[:80%]'
-    elif split == 'validate':
-        # 2700 records
-        # [293, 307, 335, 258, 253, 194, 239, 284, 243, 294]
-        ds_split = 'train[80%:90%]'
-    elif split == 'test':
-        # 2700 records
-        # [307, 300, 296, 221, 262, 216, 251, 296, 250, 301]
-        ds_split = 'train[90%:]'
-    else:
-        raise Exception("unexpected split", split)
+def validation_dataset():
+    # 2700 records
+    # [293, 307, 335, 258, 253, 194, 239, 284, 243, 294]
+    return _entire_split('train[80%:90%]')
 
-    if split == 'validate' or split == 'test':
-        # return entire dataset in one (cached) pair of numpy arrays.
-        return entire_split(ds_split)
+
+def test_dataset():
+    # 2700 records
+    # [307, 300, 296, 221, 262, 216, 251, 296, 250, 301]
+    return _entire_split('train[90%:]')
+
+
+def training_dataset(batch_size, num_inputs=1):
+    dataset = (tfds.load('eurosat/rgb', split='train[:80%]',
+                         as_supervised=True)
+               .map(_augment_and_convert_dtype, num_parallel_calls=AUTOTUNE)
+               .shuffle(1024))
+
+    if num_inputs == 1:
+        dataset = dataset.batch(batch_size)
     else:
-        # returned batched (shuffled) iterator.
-        dataset = (tfds.load('eurosat/rgb', split=ds_split, as_supervised=True)
-                   .map(_augment_and_convert_dtype)
-                   .shuffle(1024)
-                   .batch(batch_size)
-                   .prefetch(tf.data.experimental.AUTOTUNE))
-        return tfds.as_numpy(dataset)
+        def _reshape_inputs(x, y):
+            _b, h, w, c = x.shape
+            x = tf.reshape(x, (num_inputs, batch_size, h, w, c))
+            y = tf.reshape(y, (num_inputs, batch_size))
+            return x, y
+        dataset = dataset.batch(batch_size * num_inputs, drop_remainder=True)
+        dataset = dataset.map(_reshape_inputs)
+        pass
+
+    dataset = dataset.prefetch(AUTOTUNE)
+    return tfds.as_numpy(dataset)
 
 
 if __name__ == '__main__':
@@ -65,10 +74,11 @@ if __name__ == '__main__':
         return Image.fromarray((array * 255.0).astype(np.uint8))
 
     B = 4
-    for imgs, labels in dataset('train', batch_size=B*B):
+    for imgs, labels in training_dataset(batch_size=B*B,
+                                         num_inputs=3):
         break
     collage = Image.new('RGB', (64*B, 64*B))
     for i in range(B*B):
         r, c = i//B, i % B
-        collage.paste(pil_img_from_array(imgs[i]), (r*64, c*64))
+        collage.paste(pil_img_from_array(imgs[0, i]), (r*64, c*64))
     collage.resize((64*B*3, 64*B*3)).show()
