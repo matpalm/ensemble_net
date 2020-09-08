@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import datetime
+import time
 
 
 def DTS():
@@ -17,17 +18,27 @@ def ensure_dir_exists_for_file(fname):
 
 
 class EarlyStopping(object):
-    def __init__(self, patience=3, burn_in=3):
+    def __init__(self, patience=3, burn_in=3, max_runtime=None):
         self.original_patience = patience
         self.patience = patience
         self.burn_in = burn_in
         self.lowest_value = None
-        self.already_decided_to_stop = False
+        self.decided_to_stop = False
+        if max_runtime is not None:
+            self.exit_time = time.time() + max_runtime
+        else:
+            self.exit_time = None
 
     def should_stop(self, value):
         # if we've already decided to stop then return True immediately
-        if self.already_decided_to_stop:
+        if self.decided_to_stop:
             return True
+
+        # run taken too long?
+        if self.exit_time is not None:
+            if time.time() > self.exit_time:
+                self.decided_to_stop = True
+                return True
 
         # ignore first burn_in iterations
         if self.burn_in > 0:
@@ -49,10 +60,13 @@ class EarlyStopping(object):
         # if no improvement made reduce patience. if no more patience exit.
         self.patience -= 1
         if self.patience == 0:
-            self.already_decided_to_stop = True
+            self.decided_to_stop = True
             return True
         else:
             return False
+
+    def stopped(self):
+        return self.decided_to_stop
 
 
 def accuracy(predictions, labels):

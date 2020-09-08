@@ -8,6 +8,8 @@ import util
 import wandb
 import sys
 import util
+from multiprocessing import Process, Queue
+from queue import Empty
 
 
 def train(opts):
@@ -107,7 +109,7 @@ def train(opts):
 
     # run some epoches of training
     early_stopping = util.EarlyStopping()
-    for epoches in tqdm(range(opts.epochs)):
+    for epoch in tqdm(range(opts.epochs)):
         # make one pass through training set
         if single_input_mode:
             num_inputs = 1
@@ -120,6 +122,8 @@ def train(opts):
         # check validation loss and early stopping
         validation_loss = float(calculate_validation_loss(validation_imgs,
                                                           validation_labels))
+        if wandb_enabled:
+            wandb.log({'validation_loss': validation_loss}, step=epoch)
         if early_stopping.should_stop(validation_loss):
             break
 
@@ -141,16 +145,39 @@ def train(opts):
 
     # close out wandb run
     if wandb_enabled:
-        wandb.log({'validation_loss': validation_loss,
-                   'validation_accuracy': validation_accuracy},
-                  step=epoches)
+        wandb.config.early_stopped = early_stopping.stopped()
+        wandb.log({'final_validation_loss': validation_loss,
+                   'final_validation_accuracy': validation_accuracy},
+                  step=opts.epochs)
         wandb.join()
     else:
+        print("early_stopping.stopped()", early_stopping.stopped())
         print("final validation_loss", validation_loss)
         print("final validation accuracy", validation_accuracy)
 
     # return validation loss to ax
     return validation_loss
+
+
+def train_in_subprocess(opts):
+    result_queue = Queue()
+
+    def _callback(q, opts):
+        q.put(train(opts))
+
+    p = Process(target=_callback, args=(result_queue, opts))
+    p.daemon = True  # Q: will this fix the wandb hanging? A: nope.
+    p.start()
+
+    try:
+        timeout = 60 * 10  # 10 min
+        validation_loss = result_queue.get(timeout=timeout)
+        p.join()
+        return validation_loss
+    except Empty:
+        print("subprocess timeout", sys.stderr)
+        p.terminate()
+        return None
 
 
 if __name__ == '__main__':

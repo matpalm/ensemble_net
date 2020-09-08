@@ -6,7 +6,10 @@ import time
 import sys
 import util as u
 import random
+import json
+import tensorflow as tf
 
+#tf.config.experimental.set_visible_devices([], "GPU")
 
 parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -25,6 +28,10 @@ if cmd_line_opts.config_combo not in ['single_input_output',
                                       'multiple_inputs_multiple_outputs']:
     raise Exception("invalid --config-combo")
 print(cmd_line_opts, file=sys.stderr)
+
+# note: if running on display GPU you probably want to run set env var
+# something like XLA_PYTHON_CLIENT_MEM_FRACTION=.8 to allow jobs tuned too
+# large to faily cleanly with OOM
 
 # we tune for 3 major configuration combos; see train.py for more info.
 
@@ -51,18 +58,18 @@ ax_params = [
         "bounds": [1e-5, 1e-2],
         "log_scale": True,
     },
-    {
-        "name": "batch_size",
-        "type": "choice",
-        "values": [32, 64, 128],
-    },
+    # {
+    #     "name": "batch_size",
+    #     "type": "choice",
+    #     "values": [32, 64, 128],
+    # },
 ]
 
 if cmd_line_opts.config_combo != 'single_input_output':
     ax_params.append({
         "name": "num_models",
         "type": "choice",
-        "values": [2, 4],
+        "values": [2, 4, 8],
     })
 
 ax = AxClient()
@@ -84,7 +91,7 @@ print("trial_index\tparameters\truntime\tfinal_loss", file=log)
 
 while True:
     parameters, trial_index = ax.get_next_trial()
-    log_record = [trial_index, parameters]
+    log_record = [trial_index, json.dumps(parameters)]
     print("starting", log_record)
 
     class Opts(object):
@@ -107,13 +114,13 @@ while True:
         opts.num_models = parameters['num_models']
 
     opts.dense_kernel_size = parameters['dense_kernel_size']
-    opts.batch_size = parameters['batch_size']
+    opts.batch_size = 32  # parameters['batch_size']
     opts.learning_rate = parameters['learning_rate']
-    opts.epochs = 30  # max to run, we also use early stopping
+    opts.epochs = 50  # max to run, we also use early stopping
 
     # run
     start_time = time.time()
-    final_loss = train.train(opts)
+    final_loss = train.train_in_subprocess(opts)
     log_record.append(time.time() - start_time)
     log_record.append(final_loss)
 
