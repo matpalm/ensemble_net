@@ -18,7 +18,7 @@ def ensure_dir_exists_for_file(fname):
 
 
 class EarlyStopping(object):
-    def __init__(self, patience=3, burn_in=3, max_runtime=None):
+    def __init__(self, patience=3, burn_in=5, max_runtime=None):
         self.original_patience = patience
         self.patience = patience
         self.burn_in = burn_in
