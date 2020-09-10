@@ -41,8 +41,12 @@ def train(opts):
     if wandb_enabled:
         wandb.init(project='ensemble_net', group=opts.group, name=run,
                    reinit=True)
+        # save group again explicitly to work around sync bug that drops
+        # group when 'wandb off'
+        wandb.config.group = opts.group
         wandb.config.input_mode = opts.input_mode
         wandb.config.num_models = opts.num_models
+        wandb.config.max_conv_size = opts.max_conv_size
         wandb.config.dense_kernel_size = opts.dense_kernel_size
         wandb.config.seed = opts.seed
         wandb.config.learning_rate = opts.learning_rate
@@ -53,11 +57,13 @@ def train(opts):
     # construct model
     if opts.num_models == 1:
         net = models.NonEnsembleNet(num_classes=10,
+                                    max_conv_size=opts.max_conv_size,
                                     dense_kernel_size=opts.dense_kernel_size,
                                     seed=opts.seed)
     else:
         net = models.EnsembleNet(num_models=opts.num_models,
                                  num_classes=10,
+                                 max_conv_size=opts.max_conv_size,
                                  dense_kernel_size=opts.dense_kernel_size,
                                  seed=opts.seed)
         # in single input mode the ensemble model must produce a single output
@@ -109,7 +115,9 @@ def train(opts):
 
     # run some epoches of training
     early_stopping = util.EarlyStopping()
-    for epoch in tqdm(range(opts.epochs)):
+#    for epoch in tqdm(range(opts.epochs)):
+    for epoch in range(opts.epochs):
+
         # make one pass through training set
         if single_input_mode:
             num_inputs = 1
@@ -118,7 +126,15 @@ def train(opts):
         train_ds = data.training_dataset(batch_size=opts.batch_size,
                                          num_inputs=num_inputs)
         for imgs, labels in train_ds:
-            train_step(imgs, labels)
+            try:
+                train_step(imgs, labels)
+            except RuntimeError as re:
+                # this is most likely (hopefully?) GPU OOM.
+                # join wandb now to stop it locking sub process launched by ax
+                print("!!!!!!!!!!!!!!!!!!!!!!!", re, file=sys.stderr)
+                wandb.join()
+                return None
+
         # check validation loss and early stopping
         validation_loss = float(calculate_validation_loss(validation_imgs,
                                                           validation_labels))
@@ -126,6 +142,7 @@ def train(opts):
             wandb.log({'validation_loss': validation_loss}, step=epoch)
         if early_stopping.should_stop(validation_loss):
             break
+        sys.stdout.flush()
 
     # save model
     # TODO: in early stopping case we can save the prior checkpoint with the
@@ -163,7 +180,11 @@ def train_in_subprocess(opts):
     result_queue = Queue()
 
     def _callback(q, opts):
-        q.put(train(opts))
+        try:
+            q.put(train(opts))
+        except Exception as e:
+            print("Exception in train call", e)
+            q.put(None)
 
     p = Process(target=_callback, args=(result_queue, opts))
     p.daemon = True  # Q: will this fix the wandb hanging? A: nope.
@@ -181,6 +202,15 @@ def train_in_subprocess(opts):
 
 
 if __name__ == '__main__':
+
+    # import jax.profiler
+    # server = jax.profiler.start_server(9999)
+    # print("PROFILER STARTED")
+    # import time
+    # for i in reversed(range(5)):
+    #     print(i)
+    #     time.sleep(1)
+
     import argparse
     import sys
 
@@ -193,8 +223,9 @@ if __name__ == '__main__':
     parser.add_argument('--input-mode', type=str, default='single',
                         help="whether inputs are across all models (single) or"
                         " one input per model (multiple). inv")
+    parser.add_argument('--max-conv-size', type=int, default=64)
     parser.add_argument('--dense-kernel-size', type=int, default=16)
-    parser.add_argument('--batch-size', type=int, default=64)
+    parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--learning-rate', type=float, default=1e-3)
     parser.add_argument('--epochs', type=int, default=2)
     opts = parser.parse_args()

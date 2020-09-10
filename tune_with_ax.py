@@ -48,14 +48,19 @@ print(cmd_line_opts, file=sys.stderr)
 
 ax_params = [
     {
+        "name": "max_conv_size",
+        "type": "range",
+        "bounds": [8, 96],
+    },
+    {
         "name": "dense_kernel_size",
         "type": "range",
-        "bounds": [8, 64],
+        "bounds": [8, 96],
     },
     {
         "name": "learning_rate",
         "type": "range",
-        "bounds": [1e-5, 1e-2],
+        "bounds": [1e-4, 1e-1],
         "log_scale": True,
     },
     # {
@@ -68,8 +73,8 @@ ax_params = [
 if cmd_line_opts.config_combo != 'single_input_output':
     ax_params.append({
         "name": "num_models",
-        "type": "choice",
-        "values": [2, 4, 8],
+        "type": "range",
+        "bounds": [2, 6],
     })
 
 ax = AxClient()
@@ -113,6 +118,7 @@ while True:
         opts.input_mode = 'multiple'
         opts.num_models = parameters['num_models']
 
+    opts.max_conv_size = parameters['max_conv_size']
     opts.dense_kernel_size = parameters['dense_kernel_size']
     opts.batch_size = 32  # parameters['batch_size']
     opts.learning_rate = parameters['learning_rate']
@@ -120,7 +126,8 @@ while True:
 
     # run
     start_time = time.time()
-    final_loss = train.train_in_subprocess(opts)
+    # final_loss = train.train_in_subprocess(opts)  # causing OOMS? cleanup?
+    final_loss = train.train(opts)
     log_record.append(time.time() - start_time)
     log_record.append(final_loss)
 
@@ -128,6 +135,10 @@ while True:
     if final_loss is None:
         print("ax trial", trial_index, "failed?")
         ax.log_trial_failure(trial_index=trial_index)
+        # weird things can happy when attempting to relaunch a GPU process
+        # too soon after having one fail hard with OOM. sleeping a bit appears
+        # to help kernel do some clean up. god help me.
+        time.sleep(10)
     else:
         ax.complete_trial(trial_index=trial_index,
                           raw_data={'final_loss': (final_loss, 0)})

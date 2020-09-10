@@ -36,7 +36,8 @@ def _dense_layer(activation, inp, kernel, bias):
 
 class NonEnsembleNet(objax.Module):
 
-    def __init__(self, num_classes, dense_kernel_size=32, seed=0):
+    def __init__(self, num_classes, max_conv_size=64, dense_kernel_size=32,
+                 seed=0):
         key = random.PRNGKey(seed)
         subkeys = random.split(key, 8)
 
@@ -44,7 +45,8 @@ class NonEnsembleNet(objax.Module):
         self.conv_kernels = objax.ModuleList()
         self.conv_biases = objax.ModuleList()
         input_channels = 3
-        for i, output_channels in enumerate([32, 64, 128, 256]):
+        for i, output_channels in enumerate([32, 64, 96, 96]):
+            output_channels = min(output_channels, max_conv_size)
             self.conv_kernels.append(TrainVar(he_normal()(
                 subkeys[i], (3, 3, input_channels, output_channels))))
             self.conv_biases.append(TrainVar(jnp.zeros((output_channels))))
@@ -68,15 +70,15 @@ class NonEnsembleNet(objax.Module):
           logit values for input images  (B, C)
         """
 
-        # conv stack -> (B, 3, 3, 256)
+        # conv stack -> (B, 3, 3, MCS)   MaxConvSize
         y = inp
         for kernel, bias in zip(self.conv_kernels, self.conv_biases):
             y = _conv_layer(2, gelu, y, kernel.value, bias.value)
 
-        # global spatial pooling -> (B, 256)
+        # global spatial pooling -> (B, MCS)
         y = jnp.mean(y, axis=(1, 2))
 
-        # dense layer with non linearity -> (B, DKS)
+        # dense layer with non linearity -> (B, DKS)  DenseKernelSize
         y = _dense_layer(gelu, y, self.dense_kernel.value,
                          self.dense_bias.value)
 
@@ -107,7 +109,8 @@ class NonEnsembleNet(objax.Module):
 
 class EnsembleNet(objax.Module):
 
-    def __init__(self, num_models, num_classes, dense_kernel_size=32, seed=0):
+    def __init__(self, num_models, num_classes, max_conv_size=64,
+                 dense_kernel_size=32, seed=0):
         self.num_models = num_models
 
         key = random.PRNGKey(seed)
@@ -117,7 +120,8 @@ class EnsembleNet(objax.Module):
         self.conv_kernels = objax.ModuleList()
         self.conv_biases = objax.ModuleList()
         input_channels = 3
-        for i, output_channels in enumerate([32, 64, 64, 64]):
+        for i, output_channels in enumerate([32, 64, 128, 256]):
+            output_channels = min(output_channels, max_conv_size)
             self.conv_kernels.append(TrainVar(he_normal()(
                 subkeys[i], (num_models, 3, 3, input_channels,
                              output_channels))))
