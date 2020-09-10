@@ -9,24 +9,15 @@ import random
 import json
 import tensorflow as tf
 
-#tf.config.experimental.set_visible_devices([], "GPU")
+# tf.config.experimental.set_visible_devices([], "GPU")
 
 parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--group', type=str, default=None,
                     help='wandb group. if none, no logging')
-parser.add_argument('--config-combo', type=str, default=None,
-                    help="one of {single_input_output,"
-                         " single_input_multiple_outputs,"
-                         " multiple_inputs_multiple_outputs")
-
 # parser.add_argument('--prior-run-logs', type=str, default=None,
 #                     help='a comma seperated prior runs to prime ax client with')
 cmd_line_opts = parser.parse_args()
-if cmd_line_opts.config_combo not in ['single_input_output',
-                                      'single_input_multiple_outputs',
-                                      'multiple_inputs_multiple_outputs']:
-    raise Exception("invalid --config-combo")
 print(cmd_line_opts, file=sys.stderr)
 
 # note: if running on display GPU you probably want to run set env var
@@ -47,6 +38,16 @@ print(cmd_line_opts, file=sys.stderr)
 #    loss is still averaged over all models though.
 
 ax_params = [
+    {
+        "name": "input_mode",
+        "type": "choice",
+        "values": ["single", "multiple"],
+    },
+    {
+        "name": "num_models",
+        "type": "range",
+        "bounds": [1, 6],
+    },
     {
         "name": "max_conv_size",
         "type": "range",
@@ -70,13 +71,6 @@ ax_params = [
     # },
 ]
 
-if cmd_line_opts.config_combo != 'single_input_output':
-    ax_params.append({
-        "name": "num_models",
-        "type": "range",
-        "bounds": [2, 6],
-    })
-
 ax = AxClient()
 ax.create_experiment(
     name="ensemble_net_tuning",
@@ -93,7 +87,6 @@ u.ensure_dir_exists("logs/%s" % cmd_line_opts.group)
 log = open("logs/%s/ax_trials.tsv" % cmd_line_opts.group, "w")
 print("trial_index\tparameters\truntime\tfinal_loss", file=log)
 
-
 while True:
     parameters, trial_index = ax.get_next_trial()
     log_record = [trial_index, json.dumps(parameters)]
@@ -105,19 +98,8 @@ while True:
 
     opts.group = cmd_line_opts.group
     opts.seed = random.randint(0, 1e9)
-
-    # TODO: consider just making input_mode a tunable independent of
-    #       num_models and just training loop mark the combo as infeasible.
-    if cmd_line_opts.config_combo == 'single_input_output':
-        opts.input_mode = 'single'
-        opts.num_models = 1
-    elif cmd_line_opts.config_combo == 'single_input_multiple_outputs':
-        opts.input_mode = 'single'
-        opts.num_models = parameters['num_models']
-    else:  # config_combo multiple_inputs_multiple_outputs
-        opts.input_mode = 'multiple'
-        opts.num_models = parameters['num_models']
-
+    opts.input_mode = parameters['input_mode']
+    opts.num_models = parameters['num_models']
     opts.max_conv_size = parameters['max_conv_size']
     opts.dense_kernel_size = parameters['dense_kernel_size']
     opts.batch_size = 32  # parameters['batch_size']

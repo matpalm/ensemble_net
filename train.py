@@ -13,6 +13,7 @@ from queue import Empty
 
 
 def train(opts):
+    print(">train", str(opts))
 
     # check --inputs and --num-models config combo. there are only three combos
     # we support.
@@ -32,7 +33,9 @@ def train(opts):
         raise Exception("invalid --input-mode value")
     single_input_mode = opts.input_mode == 'single'
     if not single_input_mode and opts.num_models == 1:
-        raise Exception("--num-models must be >1 when --input-mode=multiple")
+        print("--num-models must be >1 when --input-mode=multiple",
+              file=sys.stderr)
+        return None
 
     run = util.DTS()
 
@@ -51,6 +54,7 @@ def train(opts):
         wandb.config.seed = opts.seed
         wandb.config.learning_rate = opts.learning_rate
         wandb.config.batch_size = opts.batch_size
+        print("wandb.config", wandb.config)
     else:
         print("not using wandb", file=sys.stderr)
 
