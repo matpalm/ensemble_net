@@ -13,8 +13,6 @@ from queue import Empty
 
 
 def train(opts):
-    print(">train", str(opts))
-
     # check --inputs and --num-models config combo. there are only three combos
     # we support.
     #
@@ -38,6 +36,7 @@ def train(opts):
         return None
 
     run = util.DTS()
+    print("starting run", run)
 
     # init w & b
     wandb_enabled = opts.group is not None
@@ -54,7 +53,6 @@ def train(opts):
         wandb.config.seed = opts.seed
         wandb.config.learning_rate = opts.learning_rate
         wandb.config.batch_size = opts.batch_size
-        print("wandb.config", wandb.config)
     else:
         print("not using wandb", file=sys.stderr)
 
@@ -117,11 +115,19 @@ def train(opts):
     # read entire validation set
     validation_imgs, validation_labels = data.validation_dataset()
 
-    # run some epoches of training
-    early_stopping = util.EarlyStopping()
-#    for epoch in tqdm(range(opts.epochs)):
-    for epoch in range(opts.epochs):
+    # set up checkpointing; just need more ckpts than early stopping
+    # patience
+    ckpt_dir = "saved_models/"
+    if opts.group:
+        ckpt_dir += f"{opts.group}/"
+    else:
+        ckpt_dir += "no_group/"
+    ckpt_dir += run
+    ckpt = objax.io.Checkpoint(logdir=ckpt_dir, keep_ckpts=10)
 
+    # run some epoches of training (with early stopping)
+    early_stopping = util.EarlyStopping(smoothing=0.25)
+    for epoch in range(opts.epochs):
         # make one pass through training set
         if single_input_mode:
             num_inputs = 1
@@ -139,25 +145,20 @@ def train(opts):
                 wandb.join()
                 return None
 
-        # check validation loss and early stopping
+        # checkpoint
+        ckpt.save(net.vars(), idx=epoch)
+
+        # check validation loss
         validation_loss = float(calculate_validation_loss(validation_imgs,
                                                           validation_labels))
+        print("epoch", epoch, "validation_loss", validation_loss)
+        sys.stdout.flush()
         if wandb_enabled:
             wandb.log({'validation_loss': validation_loss}, step=epoch)
+
+        # check early stopping
         if early_stopping.should_stop(validation_loss):
             break
-        sys.stdout.flush()
-
-    # save model
-    # TODO: in early stopping case we can save the prior checkpoint with the
-    #       best performance
-    model_save_file = "saved_models/"
-    if opts.group:
-        model_save_file += f"{opts.group}/"
-    model_save_file += f"{run}/final.npz"
-    util.ensure_dir_exists_for_file(model_save_file)
-    print("saved final model to", model_save_file)
-    objax.io.save_var_collection(model_save_file, net.vars())
 
     # final validation metrics
     validation_predictions = net.predict(validation_imgs, single_result=True)
