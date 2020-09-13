@@ -39,7 +39,7 @@ class NonEnsembleNet(objax.Module):
     def __init__(self, num_classes, max_conv_size=64, dense_kernel_size=32,
                  seed=0):
         key = random.PRNGKey(seed)
-        subkeys = random.split(key, 8)
+        subkeys = random.split(key, 6)
 
         # conv stack kernels and biases
         self.conv_kernels = objax.ModuleList()
@@ -54,12 +54,12 @@ class NonEnsembleNet(objax.Module):
 
         # dense layer kernel and bias
         self.dense_kernel = TrainVar(he_normal()(
-            subkeys[6], (output_channels, dense_kernel_size)))
+            subkeys[4], (output_channels, dense_kernel_size)))
         self.dense_bias = TrainVar(jnp.zeros((dense_kernel_size)))
 
         # classifier layer kernel and bias
         self.logits_kernel = TrainVar(glorot_normal()(
-            subkeys[6], (dense_kernel_size, num_classes)))
+            subkeys[5], (dense_kernel_size, num_classes)))
         self.logits_bias = TrainVar(jnp.zeros((num_classes)))
 
     def logits(self, inp, single_result):
@@ -114,7 +114,7 @@ class EnsembleNet(objax.Module):
         self.num_models = num_models
 
         key = random.PRNGKey(seed)
-        subkeys = random.split(key, 8)
+        subkeys = random.split(key, 6)
 
         # conv stack kernels and biases
         self.conv_kernels = objax.ModuleList()
@@ -131,12 +131,12 @@ class EnsembleNet(objax.Module):
 
         # dense layer kernel and bias
         self.dense_kernel = TrainVar(he_normal()(
-            subkeys[6], (num_models, output_channels, dense_kernel_size)))
+            subkeys[4], (num_models, output_channels, dense_kernel_size)))
         self.dense_bias = TrainVar(jnp.zeros((num_models, dense_kernel_size)))
 
         # classifier layer kernel and bias
         self.logits_kernel = TrainVar(glorot_normal()(
-            subkeys[6], (num_models, dense_kernel_size, num_classes)))
+            subkeys[5], (num_models, dense_kernel_size, num_classes)))
         self.logits_bias = TrainVar(jnp.zeros((num_models, num_classes)))
 
     def logits(self, inp, single_result):
