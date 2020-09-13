@@ -2,6 +2,9 @@ import os
 import numpy as np
 import datetime
 import time
+import data
+from objax.functional.loss import cross_entropy_logits_sparse
+import jax.numpy as jnp
 
 
 def DTS():
@@ -85,7 +88,25 @@ class EarlyStopping(object):
         return self.decided_to_stop
 
 
-def accuracy(predictions, labels):
-    num_correct = np.equal(predictions, labels).sum()
-    num_total = len(predictions)
+def mean_loss(net, dataset):
+    # TODO: could go to NonEnsembleNet/EnsembleNet base class
+    losses_total = 0
+    num_losses = 0
+    for imgs, labels in dataset:
+        logits = net.logits(imgs, single_result=True, logits_dropout=False)
+        losses = cross_entropy_logits_sparse(logits, labels)
+        losses_total += jnp.sum(losses)
+        num_losses += len(losses)
+    return losses_total / num_losses
+
+
+def accuracy(net, dataset):
+    # TODO: could go to NonEnsembleNet/EnsembleNet base class
+    y_pred = []
+    y_true = []
+    for imgs, labels in dataset:
+        y_pred.extend(net.predict(imgs, single_result=True))
+        y_true.extend(labels)
+    num_correct = np.equal(y_pred, y_true).sum()
+    num_total = len(y_pred)
     return num_correct / num_total

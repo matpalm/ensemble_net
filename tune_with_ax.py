@@ -15,8 +15,6 @@ parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--group', type=str, default=None,
                     help='wandb group. if none, no logging')
-# parser.add_argument('--prior-run-logs', type=str, default=None,
-#                     help='a comma seperated prior runs to prime ax client with')
 cmd_line_opts = parser.parse_args()
 print(cmd_line_opts, file=sys.stderr)
 
@@ -79,10 +77,6 @@ ax.create_experiment(
     minimize=True,
 )
 
-# if cmd_line_opts.prior_run_logs is not None:
-#     for log_tsv in cmd_line_opts.prior_run_logs.split(","):
-#         u.prime_ax_client_with_prior_run(ax, log_tsv)
-
 u.ensure_dir_exists("logs/%s" % cmd_line_opts.group)
 log = open("logs/%s/ax_trials.tsv" % cmd_line_opts.group, "w")
 print("trial_index\tparameters\truntime\tfinal_loss", file=log)
@@ -104,7 +98,8 @@ while True:
     opts.dense_kernel_size = parameters['dense_kernel_size']
     opts.batch_size = 32  # parameters['batch_size']
     opts.learning_rate = parameters['learning_rate']
-    opts.epochs = 50  # max to run, we also use early stopping
+    opts.epochs = 60  # max to run, we also use early stopping
+    opts.logits_dropout = False  # not yet under tuning
 
     # run
     start_time = time.time()
@@ -131,3 +126,6 @@ while True:
     print(log_msg, file=log)
     print(log_msg)
     log.flush()
+
+    # save ax state
+    ax.save_to_json_file()

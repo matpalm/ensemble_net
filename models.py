@@ -114,7 +114,7 @@ class EnsembleNet(objax.Module):
         self.num_models = num_models
 
         key = random.PRNGKey(seed)
-        subkeys = random.split(key, 6)
+        subkeys = random.split(key, 7)
 
         # conv stack kernels and biases
         self.conv_kernels = objax.ModuleList()
@@ -139,7 +139,9 @@ class EnsembleNet(objax.Module):
             subkeys[5], (num_models, dense_kernel_size, num_classes)))
         self.logits_bias = TrainVar(jnp.zeros((num_models, num_classes)))
 
-    def logits(self, inp, single_result):
+        self.dropout_key = subkeys[6]
+
+    def logits(self, inp, single_result, logits_dropout=False):
         """return logits over inputs.
         Args:
           inp: input images. either (B, HW, HW, 3) in which case all models
@@ -194,9 +196,27 @@ class EnsembleNet(objax.Module):
         logits = vmap(partial(_dense_layer, None))(
             y, self.logits_kernel.value, self.logits_bias.value)
 
+        # if dropout case randomly drop 50% of logits
+        if logits_dropout:
+            # extract size of logits for making mask
+            num_models = logits.shape[0]
+            batch_size = logits.shape[1]
+            num_classes = logits.shape[2]
+            # make a new (M, B) drop out mask of 0s & 1s
+            self.dropout_key, key = random.split(self.dropout_key)
+            mask = jax.random.randint(key, (num_models, batch_size),
+                                      minval=0, maxval=2)
+            # broadcast it along the logit axis to make (M, B, C)
+            # TODO: should be doable in jnp.tile (?)
+            mask = mask.reshape((num_models, batch_size, 1))
+            mask = jnp.broadcast_to(mask,
+                                    (num_models, batch_size, num_classes))
+            # apply mask
+            logits *= mask
+
+        # if single result sum logits over models to represent single
+        # ensemble result (B, num_classes)
         if single_result:
-            # sum logits over models to represent single ensemble result
-            # (B, num_classes)
             logits = jnp.sum(logits, axis=0)
 
         return logits
@@ -215,7 +235,7 @@ class EnsembleNet(objax.Module):
                      mode.
         """
 
-        return jax.nn.softmax(self.logits(inp, single_result), axis=-1)
+        return jax.nn.softmax(self.logits(inp, single_result, False), axis=-1)
 
     def predict(self, inp, single_result):
         """return class predictions. i.e. argmax over logits.
@@ -231,4 +251,4 @@ class EnsembleNet(objax.Module):
                      mode.
         """
 
-        return jnp.argmax(self.logits(inp, single_result), axis=-1)
+        return jnp.argmax(self.logits(inp, single_result, False), axis=-1)

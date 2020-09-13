@@ -3,3 +3,5 @@ __pycache__/
 logs/
 wandb/
 saved_models/
+collages/
+ax_client_snapshot.json

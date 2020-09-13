@@ -10,6 +10,7 @@ def _convert_dtype(x):
     return tf.cast(x, tf.float32) / 255
 
 
+@tf.autograph.experimental.do_not_convert
 def _augment_and_convert_dtype(x, y):
     # rotate 0, 90, 180 or 270 deg
     k = tf.random.uniform([], 0, 3, dtype=tf.int32)
@@ -26,23 +27,30 @@ def _augment_and_convert_dtype(x, y):
     return x, y
 
 
-@lru_cache()
-def _entire_split(ds_split):
-    x, y = tfds.load('eurosat/rgb', split=ds_split, shuffle_files=False,
-                     batch_size=-1, as_supervised=True)
-    return np.array(_convert_dtype(x)), np.array(y)
+def _non_training_dataset(batch_size, ds_split):
+
+    @tf.autograph.experimental.do_not_convert
+    def _convert_image_dtype(x, y):
+        return _convert_dtype(x), y
+
+    dataset = (tfds.load('eurosat/rgb', split=ds_split,
+                         as_supervised=True)
+               .map(_convert_image_dtype, num_parallel_calls=AUTOTUNE)
+               .batch(batch_size)
+               .shuffle(1024))
+    return tfds.as_numpy(dataset)
 
 
-def validation_dataset():
+def validation_dataset(batch_size):
     # 2700 records
     # [293, 307, 335, 258, 253, 194, 239, 284, 243, 294]
-    return _entire_split('train[80%:90%]')
+    return _non_training_dataset(batch_size, 'train[80%:90%]')
 
 
-def test_dataset():
+def test_dataset(batch_size):
     # 2700 records
     # [307, 300, 296, 221, 262, 216, 251, 296, 250, 301]
-    return _entire_split('train[90%:]')
+    return _non_training_dataset(batch_size, 'train[90%:]')
 
 
 def training_dataset(batch_size, num_inputs=1):

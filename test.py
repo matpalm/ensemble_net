@@ -31,11 +31,9 @@ else:
 objax.io.load_var_collection(opts.saved_model, net.vars())
 
 # check against validation set
-imgs, labels = data.validation_dataset()
-accuracy = util.accuracy(net.predict(imgs, single_result=True), labels)
+accuracy = util.accuracy(net, data.validation_dataset(batch_size=128))
 print("validation accuracy %0.3f" % accuracy)
 
 # check against test set
-imgs, labels = data.test_dataset()
-accuracy = util.accuracy(net.predict(imgs, single_result=True), labels)
+accuracy = util.accuracy(net, data.test_dataset(batch_size=128))
 print("test accuracy %0.3f" % accuracy)

@@ -82,7 +82,8 @@ def train(opts):
     # to one output). this is also the form of the loss called during validation
     # loss calculation where the imgs, labels is the entire split.
     def cross_entropy(imgs, labels):
-        logits = net.logits(imgs, single_result=True)
+        logits = net.logits(imgs, single_result=True,
+                            logits_dropout=opts.logits_dropout)
         return jnp.mean(cross_entropy_logits_sparse(logits, labels))
 
     # in multiple input mode we get an output per model; so the logits are
@@ -90,7 +91,8 @@ def train(opts):
     # (M, B). in this case we flatten the logits to (M*B, C) and the labels
     # to (M*B,) for the cross entropy calculation.
     def nested_cross_entropy(imgs, labels):
-        logits = net.logits(imgs, single_result=False)
+        logits = net.logits(imgs, single_result=False,
+                            logits_dropout=opts.logits_dropout)
         m, b, c = logits.shape
         logits = logits.reshape((m*b, c))
         labels = labels.reshape((m*b,))
@@ -108,12 +110,6 @@ def train(opts):
         optimiser(opts.learning_rate, grads)
     train_step = objax.Jit(train_step,
                            gradient_loss.vars() + optimiser.vars())
-
-    # create jitted call for validation loss
-    calculate_validation_loss = objax.Jit(cross_entropy, net.vars())
-
-    # read entire validation set
-    validation_imgs, validation_labels = data.validation_dataset()
 
     # set up checkpointing; just need more ckpts than early stopping
     # patience
@@ -149,8 +145,8 @@ def train(opts):
         ckpt.save(net.vars(), idx=epoch)
 
         # check validation loss
-        validation_loss = float(calculate_validation_loss(validation_imgs,
-                                                          validation_labels))
+        validation_dataset = data.validation_dataset(opts.batch_size)
+        validation_loss = util.mean_loss(net, validation_dataset)
         print("epoch", epoch, "validation_loss", validation_loss)
         sys.stdout.flush()
         if wandb_enabled:
@@ -160,22 +156,15 @@ def train(opts):
         if early_stopping.should_stop(validation_loss):
             break
 
-    # final validation metrics
-    validation_predictions = net.predict(validation_imgs, single_result=True)
-    validation_accuracy = util.accuracy(validation_predictions,
-                                        validation_labels)
-
     # close out wandb run
     if wandb_enabled:
         wandb.config.early_stopped = early_stopping.stopped()
-        wandb.log({'final_validation_loss': validation_loss,
-                   'final_validation_accuracy': validation_accuracy},
+        wandb.log({'final_validation_loss': validation_loss},
                   step=opts.epochs)
         wandb.join()
     else:
         print("early_stopping.stopped()", early_stopping.stopped())
         print("final validation_loss", validation_loss)
-        print("final validation accuracy", validation_accuracy)
 
     # return validation loss to ax
     return validation_loss
@@ -233,6 +222,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--learning-rate', type=float, default=1e-3)
     parser.add_argument('--epochs', type=int, default=2)
+    parser.add_argument('--logits-dropout', action='store_true')
     opts = parser.parse_args()
     print(opts, file=sys.stderr)
 
