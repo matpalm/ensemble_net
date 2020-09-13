@@ -18,21 +18,37 @@ def ensure_dir_exists_for_file(fname):
 
 
 class EarlyStopping(object):
-    def __init__(self, patience=3, burn_in=5, max_runtime=None):
+    def __init__(self, patience=3, burn_in=5, max_runtime=None,
+                 smoothing=0.0):
+        # smoothing = 0.0 => no smoothing
+
         self.original_patience = patience
         self.patience = patience
         self.burn_in = burn_in
         self.lowest_value = None
+
         self.decided_to_stop = False
         if max_runtime is not None:
             self.exit_time = time.time() + max_runtime
         else:
             self.exit_time = None
 
+        if smoothing < 0.0 or smoothing > 1.0:
+            raise Exception("invalid smoothing value %s" % smoothing)
+        self.smoothing = 1.0 - smoothing
+        self.smoothed_value = None
+
     def should_stop(self, value):
         # if we've already decided to stop then return True immediately
         if self.decided_to_stop:
             return True
+
+        # calc smoothed value
+        if self.smoothed_value is None:
+            self.smoothed_value = value
+        else:
+            self.smoothed_value += self.smoothing * \
+                (value - self.smoothed_value)
 
         # run taken too long?
         if self.exit_time is not None:
@@ -47,14 +63,14 @@ class EarlyStopping(object):
 
         # take very first value we see as the lowest
         if self.lowest_value is None:
-            self.lowest_value = value
+            self.lowest_value = self.smoothed_value
 
         # check if we've made an improvement; if so reset patience and record
         # new lowest
-        made_improvement = value < self.lowest_value
+        made_improvement = self.smoothed_value < self.lowest_value
         if made_improvement:
             self.patience = self.original_patience
-            self.lowest_value = value
+            self.lowest_value = self.smoothed_value
             return False
 
         # if no improvement made reduce patience. if no more patience exit.
