@@ -45,7 +45,7 @@ class NonEnsembleNet(objax.Module):
         self.conv_kernels = objax.ModuleList()
         self.conv_biases = objax.ModuleList()
         input_channels = 3
-        for i, output_channels in enumerate([32, 64, 96, 96]):
+        for i, output_channels in enumerate([32, 64, 128, 256]):
             output_channels = min(output_channels, max_conv_size)
             self.conv_kernels.append(TrainVar(he_normal()(
                 subkeys[i], (3, 3, input_channels, output_channels))))
@@ -62,7 +62,7 @@ class NonEnsembleNet(objax.Module):
             subkeys[5], (dense_kernel_size, num_classes)))
         self.logits_bias = TrainVar(jnp.zeros((num_classes)))
 
-    def logits(self, inp, single_result):
+    def logits(self, inp, single_result, logits_dropout=False):
         """return logits over inputs
         Args:
           inp: input images  (B, HW, HW, 3)

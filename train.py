@@ -147,7 +147,7 @@ def train(opts):
         # check validation loss
         validation_dataset = data.validation_dataset(opts.batch_size)
         validation_loss = util.mean_loss(net, validation_dataset)
-        print("epoch", epoch, "validation_loss", validation_loss)
+        print(run, "epoch", epoch, "validation_loss", validation_loss)
         sys.stdout.flush()
         if wandb_enabled:
             wandb.log({'validation_loss': validation_loss}, step=epoch)
@@ -163,8 +163,9 @@ def train(opts):
                   step=opts.epochs)
         wandb.join()
     else:
-        print("early_stopping.stopped()", early_stopping.stopped())
-        print("final validation_loss", validation_loss)
+        print("finished", run,
+              " early_stopping.stopped()", early_stopping.stopped(),
+              " final validation_loss", validation_loss)
 
     # return validation loss to ax
     return validation_loss

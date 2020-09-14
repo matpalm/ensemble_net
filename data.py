@@ -62,6 +62,7 @@ def training_dataset(batch_size, num_inputs=1):
     if num_inputs == 1:
         dataset = dataset.batch(batch_size)
     else:
+        @tf.autograph.experimental.do_not_convert
         def _reshape_inputs(x, y):
             _b, h, w, c = x.shape
             x = tf.reshape(x, (num_inputs, batch_size, h, w, c))

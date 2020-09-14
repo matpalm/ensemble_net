@@ -97,7 +97,7 @@ def mean_loss(net, dataset):
         losses = cross_entropy_logits_sparse(logits, labels)
         losses_total += jnp.sum(losses)
         num_losses += len(losses)
-    return losses_total / num_losses
+    return float(losses_total / num_losses)
 
 
 def accuracy(net, dataset):
@@ -109,4 +109,4 @@ def accuracy(net, dataset):
         y_true.extend(labels)
     num_correct = np.equal(y_pred, y_true).sum()
     num_total = len(y_pred)
-    return num_correct / num_total
+    return float(num_correct / num_total)

@@ -15,8 +15,13 @@ parser = argparse.ArgumentParser(
     formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument('--group', type=str, default=None,
                     help='wandb group. if none, no logging')
+parser.add_argument('--mode', type=str, required=True,
+                    help='mode; one of siso, simo, mimo')
 cmd_line_opts = parser.parse_args()
 print(cmd_line_opts, file=sys.stderr)
+
+if cmd_line_opts.mode not in ['siso', 'simo', 'mimo']:
+    raise Exception("invalid --mode")
 
 # note: if running on display GPU you probably want to run set env var
 # something like XLA_PYTHON_CLIENT_MEM_FRACTION=.8 to allow jobs tuned too
@@ -37,24 +42,14 @@ print(cmd_line_opts, file=sys.stderr)
 
 ax_params = [
     {
-        "name": "input_mode",
-        "type": "choice",
-        "values": ["single", "multiple"],
-    },
-    {
-        "name": "num_models",
-        "type": "range",
-        "bounds": [1, 6],
-    },
-    {
         "name": "max_conv_size",
         "type": "range",
-        "bounds": [8, 96],
+        "bounds": [8, 256],
     },
     {
         "name": "dense_kernel_size",
         "type": "range",
-        "bounds": [8, 96],
+        "bounds": [8, 128],
     },
     {
         "name": "learning_rate",
@@ -62,12 +57,19 @@ ax_params = [
         "bounds": [1e-4, 1e-1],
         "log_scale": True,
     },
-    # {
-    #     "name": "batch_size",
-    #     "type": "choice",
-    #     "values": [32, 64, 128],
-    # },
+    {
+        "name": "batch_size",
+        "type": "choice",
+        "values": [32, 64],
+    },
 ]
+
+if cmd_line_opts.mode in ['simo', 'mimo']:
+    ax_params.append({
+        "name": "num_models",
+        "type": "range",
+        "bounds": [2, 8],
+    })
 
 ax = AxClient()
 ax.create_experiment(
@@ -92,18 +94,29 @@ while True:
 
     opts.group = cmd_line_opts.group
     opts.seed = random.randint(0, 1e9)
-    opts.input_mode = parameters['input_mode']
-    opts.num_models = parameters['num_models']
+
+    if cmd_line_opts.mode == 'siso':
+        opts.input_mode = 'single'
+        opts.num_models = 1
+        opts.logits_dropout = False  # NA for siso
+    elif cmd_line_opts.mode == 'simo':
+        opts.input_mode = 'multiple'
+        opts.num_models = parameters['num_models']
+        opts.logits_dropout = False  # not yet under tuning
+    else:  # mimo
+        opts.input_mode = 'multiple'
+        opts.num_models = parameters['num_models']
+        opts.logits_dropout = False  # not yet under tuning
+
     opts.max_conv_size = parameters['max_conv_size']
     opts.dense_kernel_size = parameters['dense_kernel_size']
-    opts.batch_size = 32  # parameters['batch_size']
+    opts.batch_size = parameters['batch_size']
     opts.learning_rate = parameters['learning_rate']
     opts.epochs = 60  # max to run, we also use early stopping
-    opts.logits_dropout = False  # not yet under tuning
 
     # run
     start_time = time.time()
-    # final_loss = train.train_in_subprocess(opts)  # causing OOMS? cleanup?
+    # final_loss = train.train_in_subprocess(opts)
     final_loss = train.train(opts)
     log_record.append(time.time() - start_time)
     log_record.append(final_loss)
@@ -112,10 +125,6 @@ while True:
     if final_loss is None:
         print("ax trial", trial_index, "failed?")
         ax.log_trial_failure(trial_index=trial_index)
-        # weird things can happy when attempting to relaunch a GPU process
-        # too soon after having one fail hard with OOM. sleeping a bit appears
-        # to help kernel do some clean up. god help me.
-        time.sleep(10)
     else:
         ax.complete_trial(trial_index=trial_index,
                           raw_data={'final_loss': (final_loss, 0)})
