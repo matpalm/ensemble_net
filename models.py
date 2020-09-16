@@ -206,11 +206,9 @@ class EnsembleNet(objax.Module):
             self.dropout_key, key = random.split(self.dropout_key)
             mask = jax.random.randint(key, (num_models, batch_size),
                                       minval=0, maxval=2)
-            # broadcast it along the logit axis to make (M, B, C)
-            # TODO: should be doable in jnp.tile (?)
+            # tile it along the logit axis to make (M, B, C)
             mask = mask.reshape((num_models, batch_size, 1))
-            mask = jnp.broadcast_to(mask,
-                                    (num_models, batch_size, num_classes))
+            mask = jnp.tile(mask, (1, 1, num_classes))
             # apply mask
             logits *= mask
 
