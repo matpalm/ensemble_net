@@ -53,6 +53,7 @@ def train(opts):
         wandb.config.seed = opts.seed
         wandb.config.learning_rate = opts.learning_rate
         wandb.config.batch_size = opts.batch_size
+        wandb.config.logits_dropout = opts.logits_dropout
     else:
         print("not using wandb", file=sys.stderr)
 
