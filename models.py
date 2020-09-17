@@ -69,6 +69,8 @@ class NonEnsembleNet(objax.Module):
         """return logits over inputs
         Args:
           inp: input images  (B, HW, HW, 3)
+          single_result: clumsily ignore for NonEnsembleNet :/
+          logits_dropout: clumsily ignore for NonEnsembleNet :/
         Returns:
           logit values for input images  (B, C)
         """
@@ -95,6 +97,7 @@ class NonEnsembleNet(objax.Module):
         """return class predictions. i.e. argmax over logits.
         Args:
           inp: input images  (B, HW, HW, 3)
+          single_result: clumsily ignore for NonEnsembleNet :/
         Returns:
           prediction classes for input images  (B,)
         """
@@ -176,15 +179,16 @@ class EnsembleNet(objax.Module):
         # y now (M, B, HW/2 HW/2, 32)
 
         # rest of the convolution stack can be applied as vmap against both y
-        # and conv kernels, biases. final result is (M, B, 3, 3, 64)
+        # and conv kernels, biases.
+        # final result is (M, B, 3, 3, 256|max_conv_size)
         for kernel, bias in zip(self.conv_kernels[1:], self.conv_biases[1:]):
             y = vmap(partial(_conv_layer, 2, gelu))(
                 y, kernel.value, bias.value)
 
-        # global spatial pooling. (M, B, 64)
+        # global spatial pooling. (M, B, dense_kernel_size)
         y = jnp.mean(y, axis=(2, 3))
 
-        # dense layer with non linearity. (M, B, 32)
+        # dense layer with non linearity. (M, B, dense_kernel_size)
         y = vmap(partial(_dense_layer, gelu))(
             y, self.dense_kernel.value, self.dense_bias.value)
 
