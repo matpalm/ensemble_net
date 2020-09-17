@@ -156,11 +156,12 @@ class EnsembleNet(objax.Module):
         """
 
         if len(inp.shape) == 4:
-            # inp (B, HW, HW, 3)
+            # single_input mode; inp (B, HW, HW, 3)
             # apply first convolution as vmap against just inp
             y = vmap(partial(_conv_layer, 2, gelu, inp))(
                 self.conv_kernels[0].value, self.conv_biases[0].value)
         elif len(inp.shape) == 5:
+            # multi_input mode; inp (M, B, HW, HW, 3)
             if single_result:
                 raise Exception("self.single_result=True not valid when passed"
                                 " an image per model")
@@ -168,7 +169,6 @@ class EnsembleNet(objax.Module):
                 raise Exception("when passing (M, B, HW, HW, 3) the leading"
                                 " dimension needs to match the number of models"
                                 " in the ensemble.")
-            # inp (M, B, HW, HW, 3)
             # apply all convolutions, including first, as vmap against both y
             # and kernel, bias
             y = vmap(partial(_conv_layer, 2, gelu))(
