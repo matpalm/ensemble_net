@@ -15,4 +15,5 @@ python3 train.py \
     --max-conv-size 32 \
     --dense-kernel-size 32 \
     --batch-size 32 \
-    --epochs 2
+    --epochs 2 \
+    --logits-dropout

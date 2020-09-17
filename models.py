@@ -33,6 +33,9 @@ def _dense_layer(activation, inp, kernel, bias):
         block = activation(block)
     return block
 
+# TODO: introduce basecase for Ensemble & NonEnsemble to avoid
+#       clumsy single_result & logits_dropout on NonEnsemble
+
 
 class NonEnsembleNet(objax.Module):
 
@@ -88,15 +91,6 @@ class NonEnsembleNet(objax.Module):
 
         return logits
 
-    def predict_proba(self, inp, single_result):
-        """return prediction probabilities. i.e. softmax over logits.
-        Args:
-          inp: input images  (B, HW, HW, 3)
-        Returns:
-          softmax values for input images  (B, C)
-        """
-        return jax.nn.softmax(self.logits(inp, single_result), axis=-1)
-
     def predict(self, inp, single_result):
         """return class predictions. i.e. argmax over logits.
         Args:
@@ -147,6 +141,9 @@ class EnsembleNet(objax.Module):
           inp: input images. either (B, HW, HW, 3) in which case all models
             will get the same images or (M, B, HW, HW, 3) in which case each
             model will get a different image.
+          single_result: if true return single logits value for ensemble.
+            otherwise return logits for each sub model.
+          logits_dropout: if true then apply 50% dropout to logits
         Returns:
           logit values for input images. either (B, C) if in single_result mode
           or (M, B, C) otherwise.
@@ -202,7 +199,7 @@ class EnsembleNet(objax.Module):
             num_models = logits.shape[0]
             batch_size = logits.shape[1]
             num_classes = logits.shape[2]
-            # make a new (M, B) drop out mask of 0s & 1s
+            # make a new (M, B) drop out mask of 50% 0s & 1s
             self.dropout_key, key = random.split(self.dropout_key)
             mask = jax.random.randint(key, (num_models, batch_size),
                                       minval=0, maxval=2)
@@ -219,28 +216,14 @@ class EnsembleNet(objax.Module):
 
         return logits
 
-    def predict_proba(self, inp, single_result):
-        """return prediction probabilities. i.e. softmax over logits.
-        Args:
-          inp: input images. either (B, HW, HW, 3) in which case all models
-            will get the same images or (M, B, HW, HW, 3) in which case each
-            model will get a different image.
-        Returns:
-          softmax values for input images. either (B, C) if in single_result
-          mode or (M, B, C) otherwise.
-        Raises:
-          Exception: if input images are (M, B, HW, HW, 3) and in single_result
-                     mode.
-        """
-
-        return jax.nn.softmax(self.logits(inp, single_result, False), axis=-1)
-
     def predict(self, inp, single_result):
         """return class predictions. i.e. argmax over logits.
         Args:
           inp: input images. either (B, HW, HW, 3) in which case all models
             will get the same images or (M, B, HW, HW, 3) in which case each
             model will get a different image.
+          single_result: if true a single prediction for ensemble is returned.
+            otherwise return predictions per sub model.
         Returns:
           prediction classes for input images. either (B,) if in single_result
           mode or (M, B) otherwise.
