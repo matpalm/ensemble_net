@@ -36,8 +36,7 @@ def _non_training_dataset(batch_size, ds_split):
     dataset = (tfds.load('eurosat/rgb', split=ds_split,
                          as_supervised=True)
                .map(_convert_image_dtype, num_parallel_calls=AUTOTUNE)
-               .batch(batch_size)
-               .shuffle(1024))
+               .batch(batch_size))
     return tfds.as_numpy(dataset)
 
 
