@@ -136,7 +136,9 @@ class EnsembleNet(objax.Module):
             subkeys[5], (num_models, dense_kernel_size, num_classes)))
         self.logits_bias = TrainVar(jnp.zeros((num_models, num_classes)))
 
-        self.dropout_key = StateVar(subkeys[6])
+        # create a rng key generator for doing dropout each call to logits
+        # (as required)
+        self.dropout_key = objax.random.Generator(seed)
 
     def logits(self, inp, single_result, model_dropout):
         """return logits over inputs.
@@ -169,10 +171,8 @@ class EnsembleNet(objax.Module):
             # but if we are doing model dropout then we take half the models
             # by first 1) picking idxs that represents a random half of the
             # models ...
-            new_dropout_key, permute_key = random.split(self.dropout_key.value)
-            self.dropout_key.assign(new_dropout_key)
             idxs = jnp.arange(self.num_models)
-            idxs = jax.random.permutation(permute_key, idxs)
+            idxs = jax.random.permutation(self.dropout_key(), idxs)
             idxs = idxs[:(self.num_models//2)]
             # ... and then 2) slicing the variables out. all these will be of
             # shape (M/2, ...)

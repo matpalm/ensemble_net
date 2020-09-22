@@ -11,7 +11,7 @@ set -ex
 
 python3 train.py \
     --input-mode single \
-    --num-models 2 \
+    --num-models 4 \
     --max-conv-size 32 \
     --dense-kernel-size 32 \
     --batch-size 32 \
