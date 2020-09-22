@@ -109,19 +109,19 @@ while time.time() < end_time:
     if cmd_line_opts.mode == 'siso':
         opts.input_mode = 'single'
         opts.num_models = 1
-        opts.logits_dropout = False  # N/A for multi_input
+        opts.model_dropout = False  # N/A for multi_input
     elif cmd_line_opts.mode == 'simo':
         opts.input_mode = 'single'
         opts.num_models = cmd_line_opts.num_models
-        opts.logits_dropout = False  # not yet under tuning
+        opts.model_dropout = False
     elif cmd_line_opts.mode == 'simo_ld':
         opts.input_mode = 'single'
         opts.num_models = cmd_line_opts.num_models
-        opts.logits_dropout = True  # not yet under tuning
+        opts.model_dropout = True
     else:  # mimo
         opts.input_mode = 'multiple'
         opts.num_models = cmd_line_opts.num_models
-        opts.logits_dropout = False  # N/A for multi_input
+        opts.model_dropout = False  # N/A for multi_input
 
     opts.max_conv_size = parameters['max_conv_size']
     opts.dense_kernel_size = parameters['dense_kernel_size']

@@ -93,7 +93,7 @@ def mean_loss(net, dataset):
     losses_total = 0
     num_losses = 0
     for imgs, labels in dataset:
-        logits = net.logits(imgs, single_result=True, logits_dropout=False)
+        logits = net.logits(imgs, single_result=True, model_dropout=False)
         losses = cross_entropy_logits_sparse(logits, labels)
         losses_total += jnp.sum(losses)
         num_losses += len(losses)

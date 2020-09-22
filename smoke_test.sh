@@ -16,4 +16,4 @@ python3 train.py \
     --dense-kernel-size 32 \
     --batch-size 32 \
     --epochs 2 \
-    --logits-dropout
+    --model-dropout

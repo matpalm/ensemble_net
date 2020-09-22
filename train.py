@@ -53,7 +53,7 @@ def train(opts):
         wandb.config.seed = opts.seed
         wandb.config.learning_rate = opts.learning_rate
         wandb.config.batch_size = opts.batch_size
-        wandb.config.logits_dropout = opts.logits_dropout
+        wandb.config.model_dropout = opts.model_dropout
     else:
         print("not using wandb", file=sys.stderr)
 
@@ -84,7 +84,7 @@ def train(opts):
     # loss calculation where the imgs, labels is the entire split.
     def cross_entropy(imgs, labels):
         logits = net.logits(imgs, single_result=True,
-                            logits_dropout=opts.logits_dropout)
+                            model_dropout=opts.model_dropout)
         return jnp.mean(cross_entropy_logits_sparse(logits, labels))
 
     # in multiple input mode we get an output per model; so the logits are
@@ -93,7 +93,7 @@ def train(opts):
     # to (M*B,) for the cross entropy calculation.
     def nested_cross_entropy(imgs, labels):
         logits = net.logits(imgs, single_result=False,
-                            logits_dropout=opts.logits_dropout)
+                            model_dropout=opts.model_dropout)
         m, b, c = logits.shape
         logits = logits.reshape((m*b, c))
         labels = labels.reshape((m*b,))
@@ -224,7 +224,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--learning-rate', type=float, default=1e-3)
     parser.add_argument('--epochs', type=int, default=2)
-    parser.add_argument('--logits-dropout', action='store_true')
+    parser.add_argument('--model-dropout', action='store_true')
     opts = parser.parse_args()
     print(opts, file=sys.stderr)
 

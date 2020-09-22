@@ -5,7 +5,7 @@ from jax.nn.initializers import glorot_normal, he_normal
 from jax.nn.functions import gelu
 from functools import partial
 import objax
-from objax.variable import TrainVar
+from objax.variable import TrainVar, StateVar
 
 
 def _conv_layer(stride, activation, inp, kernel, bias):
@@ -34,7 +34,7 @@ def _dense_layer(activation, inp, kernel, bias):
     return block
 
 # TODO: introduce basecase for Ensemble & NonEnsemble to avoid
-#       clumsy single_result & logits_dropout on NonEnsemble
+#       clumsy single_result & model_dropout on NonEnsemble
 
 
 class NonEnsembleNet(objax.Module):
@@ -65,12 +65,12 @@ class NonEnsembleNet(objax.Module):
             subkeys[5], (dense_kernel_size, num_classes)))
         self.logits_bias = TrainVar(jnp.zeros((num_classes)))
 
-    def logits(self, inp, single_result, logits_dropout=False):
+    def logits(self, inp, single_result=None, model_dropout=None):
         """return logits over inputs
         Args:
           inp: input images  (B, HW, HW, 3)
           single_result: clumsily ignore for NonEnsembleNet :/
-          logits_dropout: clumsily ignore for NonEnsembleNet :/
+          model_dropout: clumsily ignore for NonEnsembleNet :/
         Returns:
           logit values for input images  (B, C)
         """
@@ -93,7 +93,7 @@ class NonEnsembleNet(objax.Module):
 
         return logits
 
-    def predict(self, inp, single_result):
+    def predict(self, inp, single_result=None):
         """return class predictions. i.e. argmax over logits.
         Args:
           inp: input images  (B, HW, HW, 3)
@@ -136,9 +136,9 @@ class EnsembleNet(objax.Module):
             subkeys[5], (num_models, dense_kernel_size, num_classes)))
         self.logits_bias = TrainVar(jnp.zeros((num_models, num_classes)))
 
-        self.dropout_key = subkeys[6]
+        self.dropout_key = StateVar(subkeys[6])
 
-    def logits(self, inp, single_result, logits_dropout=False):
+    def logits(self, inp, single_result, model_dropout):
         """return logits over inputs.
         Args:
           inp: input images. either (B, HW, HW, 3) in which case all models
@@ -146,7 +146,8 @@ class EnsembleNet(objax.Module):
             model will get a different image.
           single_result: if true return single logits value for ensemble.
             otherwise return logits for each sub model.
-          logits_dropout: if true then apply 50% dropout to logits
+          model_dropout: if true then only run 50% of the models during
+            training.
         Returns:
           logit values for input images. either (B, C) if in single_result mode
           or (M, B, C) otherwise.
@@ -155,11 +156,38 @@ class EnsembleNet(objax.Module):
                      mode.
         """
 
+        if not model_dropout:
+            # if we are not doing model dropout then just take all the model
+            # variables as they are. these will be of shape (M, ...)
+            conv_kernels = [k.value for k in self.conv_kernels]
+            conv_biases = [b.value for b in self.conv_biases]
+            dense_kernel = self.dense_kernel.value
+            dense_bias = self.dense_bias.value
+            logits_kernel = self.logits_kernel.value
+            logits_bias = self.logits_bias.value
+        else:
+            # but if we are doing model dropout then we take half the models
+            # by first 1) picking idxs that represents a random half of the
+            # models ...
+            new_dropout_key, permute_key = random.split(self.dropout_key.value)
+            self.dropout_key.assign(new_dropout_key)
+            idxs = jnp.arange(self.num_models)
+            idxs = jax.random.permutation(permute_key, idxs)
+            idxs = idxs[:(self.num_models//2)]
+            # ... and then 2) slicing the variables out. all these will be of
+            # shape (M/2, ...)
+            conv_kernels = [k.value[idxs] for k in self.conv_kernels]
+            conv_biases = [b.value[idxs] for b in self.conv_biases]
+            dense_kernel = self.dense_kernel.value[idxs]
+            dense_bias = self.dense_bias.value[idxs]
+            logits_kernel = self.logits_kernel.value[idxs]
+            logits_bias = self.logits_bias.value[idxs]
+
         if len(inp.shape) == 4:
             # single_input mode; inp (B, HW, HW, 3)
             # apply first convolution as vmap against just inp
-            y = vmap(partial(_conv_layer, 2, gelu, inp))(
-                self.conv_kernels[0].value, self.conv_biases[0].value)
+            y = vmap(partial(_conv_layer, 2, gelu, inp))(conv_kernels[0],
+                                                         conv_biases[0])
         elif len(inp.shape) == 5:
             # multi_input mode; inp (M, B, HW, HW, 3)
             if single_result:
@@ -171,8 +199,8 @@ class EnsembleNet(objax.Module):
                                 " in the ensemble.")
             # apply all convolutions, including first, as vmap against both y
             # and kernel, bias
-            y = vmap(partial(_conv_layer, 2, gelu))(
-                inp, self.conv_kernels[0].value, self.conv_biases[0].value)
+            y = vmap(partial(_conv_layer, 2, gelu))(inp, conv_kernels[0],
+                                                    conv_biases[0])
         else:
             raise Exception("unexpected input shape")
 
@@ -181,37 +209,19 @@ class EnsembleNet(objax.Module):
         # rest of the convolution stack can be applied as vmap against both y
         # and conv kernels, biases.
         # final result is (M, B, 3, 3, 256|max_conv_size)
-        for kernel, bias in zip(self.conv_kernels[1:], self.conv_biases[1:]):
-            y = vmap(partial(_conv_layer, 2, gelu))(
-                y, kernel.value, bias.value)
+        for kernel, bias in zip(conv_kernels[1:], conv_biases[1:]):
+            y = vmap(partial(_conv_layer, 2, gelu))(y, kernel, bias)
 
         # global spatial pooling. (M, B, dense_kernel_size)
         y = jnp.mean(y, axis=(2, 3))
 
         # dense layer with non linearity. (M, B, dense_kernel_size)
-        y = vmap(partial(_dense_layer, gelu))(
-            y, self.dense_kernel.value, self.dense_bias.value)
+        y = vmap(partial(_dense_layer, gelu))(y, dense_kernel, dense_bias)
 
         # dense layer with no activation to number classes.
         # (M, B, num_classes)
-        logits = vmap(partial(_dense_layer, None))(
-            y, self.logits_kernel.value, self.logits_bias.value)
-
-        # if dropout case randomly drop 50% of logits
-        if logits_dropout:
-            # extract size of logits for making mask
-            num_models = logits.shape[0]
-            batch_size = logits.shape[1]
-            num_classes = logits.shape[2]
-            # make a new (M, B) drop out mask of 50% 0s & 1s
-            self.dropout_key, key = random.split(self.dropout_key)
-            mask = jax.random.randint(key, (num_models, batch_size),
-                                      minval=0, maxval=2)
-            # tile it along the logit axis to make (M, B, C)
-            mask = mask.reshape((num_models, batch_size, 1))
-            mask = jnp.tile(mask, (1, 1, num_classes))
-            # apply mask
-            logits *= mask
+        logits = vmap(partial(_dense_layer, None))(y, logits_kernel,
+                                                   logits_bias)
 
         # if single result sum logits over models to represent single
         # ensemble result (B, num_classes)
