@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from jax import random, lax, vmap
 from jax.nn.initializers import glorot_normal, he_normal
-from jax.nn.functions import gelu
+from jax.nn import gelu
 from functools import partial
 import objax
 from objax.variable import TrainVar, StateVar
