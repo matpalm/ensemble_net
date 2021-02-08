@@ -49,16 +49,16 @@ if cmd_line_opts.mode not in ['siso', 'simo', 'simo_ld', 'mimo']:
 #    loss is still averaged over all models though.
 
 ax_params = [
-    {
-        "name": "max_conv_size",
-        "type": "range",
-        "bounds": [8, 256],
-    },
-    {
-        "name": "dense_kernel_size",
-        "type": "range",
-        "bounds": [8, 128],
-    },
+    # {
+    #     "name": "max_conv_size",
+    #     "type": "range",
+    #     "bounds": [8, 256],
+    # },
+    # {
+    #     "name": "dense_kernel_size",
+    #     "type": "range",
+    #     "bounds": [8, 128],
+    # },
     {
         "name": "learning_rate",
         "type": "range",

@@ -1,15 +1,28 @@
-import data
-import models
-import jax.numpy as jnp
-import objax
-from objax.functional.loss import cross_entropy_logits_sparse
-from tqdm import tqdm
-import util
-import wandb
+try:
+    import jax_pod_setup
+except ModuleNotFoundError:
+    import os
+    os.environ["CUDA_VISIBLE_DEVICES"] = ''
+    os.environ["XLA_FLAGS"] = '--xla_force_host_platform_device_count=8'
+
+import jax
+import util as u
 import sys
-import util
-from multiprocessing import Process, Queue
-from queue import Empty
+import optax
+from tqdm import tqdm
+from jax.tree_util import tree_map, tree_multimap
+import jax.numpy as jnp
+from jax.lax import psum
+from jax import vmap, value_and_grad, pmap
+import models
+import data
+import pickle
+
+
+def softmax_cross_entropy(logits, labels):
+    one_hot = jax.nn.one_hot(
+        labels, logits.shape[-1])
+    return -jnp.sum(jax.nn.log_softmax(logits) * one_hot, axis=-1)
 
 
 def train(opts):
@@ -27,174 +40,154 @@ def train(opts):
     #    multiple inputs (with multiple labels) going through multiple models.
     #    loss is still averaged over all models though.
 
-    if opts.input_mode not in ['single', 'multiple']:
-        raise Exception("invalid --input-mode value")
-    single_input_mode = opts.input_mode == 'single'
-    if not single_input_mode and opts.num_models == 1:
-        print("--num-models must be >1 when --input-mode=multiple",
-              file=sys.stderr)
-        return None
+    # if opts.input_mode not in ['single', 'multiple']:
+    #     raise Exception("invalid --input-mode value")
+    # single_input_mode = opts.input_mode == 'single'
+    # if not single_input_mode and opts.num_models == 1:
+    #     print("--num-models must be >1 when --input-mode=multiple",
+    #           file=sys.stderr)
+    #     return None
 
-    run = util.DTS()
+    run = u.DTS()
     print("starting run", run)
 
-    # init w & b
-    wandb_enabled = opts.group is not None
-    if wandb_enabled:
-        wandb.init(project='ensemble_net', group=opts.group, name=run,
-                   reinit=True)
-        # save group again explicitly to work around sync bug that drops
-        # group when 'wandb off'
-        wandb.config.group = opts.group
-        wandb.config.input_mode = opts.input_mode
-        wandb.config.num_models = opts.num_models
-        wandb.config.max_conv_size = opts.max_conv_size
-        wandb.config.dense_kernel_size = opts.dense_kernel_size
-        wandb.config.seed = opts.seed
-        wandb.config.learning_rate = opts.learning_rate
-        wandb.config.batch_size = opts.batch_size
-        wandb.config.model_dropout = opts.model_dropout
-    else:
-        print("not using wandb", file=sys.stderr)
+    # # init w & b
+    # wandb_enabled = opts.group is not None
+    # if wandb_enabled:
+    #     wandb.init(project='ensemble_net', group=opts.group, name=run,
+    #                reinit=True)
+    #     # save group again explicitly to work around sync bug that drops
+    #     # group when 'wandb off'
+    #     wandb.config.group = opts.group
+    #     wandb.config.input_mode = opts.input_mode
+    #     wandb.config.num_models = opts.num_models
+    #     wandb.config.max_conv_size = opts.max_conv_size
+    #     wandb.config.dense_kernel_size = opts.dense_kernel_size
+    #     wandb.config.seed = opts.seed
+    #     wandb.config.learning_rate = opts.learning_rate
+    #     wandb.config.batch_size = opts.batch_size
+    #     wandb.config.model_dropout = opts.model_dropout
+    # else:
+    #     print("not using wandb", file=sys.stderr)
 
-    # construct model
-    if opts.num_models == 1:
-        net = models.NonEnsembleNet(num_classes=10,
-                                    max_conv_size=opts.max_conv_size,
-                                    dense_kernel_size=opts.dense_kernel_size,
-                                    seed=opts.seed)
-    else:
-        net = models.EnsembleNet(num_models=opts.num_models,
-                                 num_classes=10,
-                                 max_conv_size=opts.max_conv_size,
-                                 dense_kernel_size=opts.dense_kernel_size,
-                                 seed=opts.seed)
-        # in single input mode the ensemble model must produce a single output
-        # for training (since the single input only has a single label). in
-        # multiple input mode the model can produce multiple outputs that
-        # correspond to the multiple labels.
-        net.single_result = single_input_mode
+    print(">build_model")
+    model = models.build_model(opts)
+    print("<build_model")
 
-    # setup loss fn and optimiser.
+    num_devices = len(jax.local_devices())
+    num_models = num_devices * opts.models_per_device
 
-    # in single input mode training the net produces the standard (B, C) logits
-    # that are compared to (B,) labels. this is regardless of the number of
-    # models (since in single inputs mode we reduce the ensemble output
-    # to one output). this is also the form of the loss called during validation
-    # loss calculation where the imgs, labels is the entire split.
-    def cross_entropy(imgs, labels):
-        logits = net.logits(imgs, single_result=True,
-                            model_dropout=opts.model_dropout)
-        return jnp.mean(cross_entropy_logits_sparse(logits, labels))
+    rng = jax.random.PRNGKey(opts.seed ^ jax.host_id())
 
-    # in multiple input mode we get an output per model; so the logits are
-    # (num_models, batch_size, num_classes) i.e. (M, B, C) with labels
-    # (M, B). in this case we flatten the logits to (M*B, C) and the labels
-    # to (M*B,) for the cross entropy calculation.
-    def nested_cross_entropy(imgs, labels):
-        logits = net.logits(imgs, single_result=False,
-                            model_dropout=opts.model_dropout)
-        m, b, c = logits.shape
-        logits = logits.reshape((m*b, c))
-        labels = labels.reshape((m*b,))
-        return jnp.mean(cross_entropy_logits_sparse(logits, labels))
+    keys = jax.random.split(rng, num_models)
+    representative_input = jnp.zeros((1, 64, 64, 3))
+    print(">init models")
+    params = vmap(lambda k: model.init(k, representative_input))(keys)
 
-    if single_input_mode:
-        gradient_loss = objax.GradValues(cross_entropy, net.vars())
-    else:
-        gradient_loss = objax.GradValues(nested_cross_entropy, net.vars())
-    optimiser = objax.optimizer.Adam(net.vars())
+    print(">init opts")
+    opt = optax.adam(opts.learning_rate)
+    opt_states = vmap(opt.init)(params)
 
-    # create jitted training step
-    def train_step(imgs, labels):
-        grads, _loss = gradient_loss(imgs, labels)
-        optimiser(opts.learning_rate, grads)
-    train_step = objax.Jit(train_step,
-                           gradient_loss.vars() + optimiser.vars())
+    def reshape_for_devices_and_shard(p):
+        return u.shard(u.reshape_leading_axis(p, (num_devices,
+                                                  opts.models_per_device)))
 
-    # set up checkpointing; just need more ckpts than early stopping
-    # patience
-    ckpt_dir = "saved_models/"
-    if opts.group:
-        ckpt_dir += f"{opts.group}/"
-    else:
-        ckpt_dir += "no_group/"
-    ckpt_dir += run
-    ckpt = objax.io.Checkpoint(logdir=ckpt_dir, keep_ckpts=10)
+    print("treemap reshape")
+    params = tree_map(reshape_for_devices_and_shard, params)
+    opt_states = tree_map(reshape_for_devices_and_shard, opt_states)
 
-    # run some epoches of training (with early stopping)
-    early_stopping = util.EarlyStopping(smoothing=0.25)
-    for epoch in range(opts.epochs):
-        # make one pass through training set
-        if single_input_mode:
-            num_inputs = 1
-        else:
-            num_inputs = opts.num_models
+    def mean_ensemble_xent(params, x, y_true):
+        logits = model.apply(params, x)
+        logits = psum(logits, axis_name='device')
+        return jnp.mean(softmax_cross_entropy(logits, y_true))
+
+    def update(params, opt_state, sub_model_idx, x, y_true):
+        # select the sub model & corresponding optimiser state to use
+        sub_params = tree_map(lambda v: v[sub_model_idx], params)
+        sub_opt_state = tree_map(lambda v: v[sub_model_idx], opt_state)
+        # calculate loss and gradients; summing logits over all selected models
+        losses, grads = value_and_grad(
+            mean_ensemble_xent)(sub_params, x, y_true)
+        # apply optimiser
+        updates, sub_opt_state = opt.update(grads, sub_opt_state)
+        sub_params = optax.apply_updates(sub_params, updates)
+
+        # assign updated values back into params and optimiser state
+        def update_sub_model(values, update_value):
+            return jax.ops.index_update(values, sub_model_idx, update_value)
+        params = tree_multimap(update_sub_model, params, sub_params)
+        opt_state = tree_multimap(update_sub_model, opt_state, sub_opt_state)
+        # return
+        return params, opt_state, losses
+
+    print(">pmap update")
+    p_update = pmap(update,
+                    in_axes=(0, 0, 0, 0, 0),
+                    axis_name='device')
+
+    for e in range(opts.epochs):
+        # train for one epoch
+        print(">data.training_dataset")
         train_ds = data.training_dataset(batch_size=opts.batch_size,
-                                         num_inputs=num_inputs)
-        for imgs, labels in train_ds:
-            try:
-                train_step(imgs, labels)
-            except RuntimeError as re:
-                # this is most likely (hopefully?) GPU OOM.
-                # join wandb now to stop it locking sub process launched by ax
-                print("!!!!!!!!!!!!!!!!!!!!!!!", re, file=sys.stderr)
-                wandb.join()
-                return None
+                                         num_inputs=1)
+        for b_idx, (imgs, labels) in enumerate(train_ds):
+            # replicate batch across M devices
+            # (M, B, H, W, 3)
+            imgs = u.replicate(imgs)
+            labels = u.replicate(labels)  # (M, B)
 
-        # checkpoint
-        ckpt.save(net.vars(), idx=epoch)
+            # run across all the 4 rotations
+            # for k in range(4):
+            #   rotated_imgs = rot90_imgs(imgs, k)
 
-        # check validation loss
-        validation_dataset = data.validation_dataset(opts.batch_size)
-        validation_loss = util.mean_loss(net, validation_dataset)
-        print(run, "epoch", epoch, "validation_loss", validation_loss)
-        sys.stdout.flush()
-        if wandb_enabled:
-            wandb.log({'validation_loss': validation_loss}, step=epoch)
+            # run some steps for this set, each with a different set of
+            # dropout idxs
+            for s in range(opts.steps_per_batch):
+                rng, dropout_key = jax.random.split(
+                    rng)
+                sub_model_idxs = jax.random.randint(dropout_key, minval=0,
+                                                    maxval=opts.models_per_device,
+                                                    shape=(num_devices,))
+                params, opt_states, losses = p_update(params, opt_states,
+                                                      sub_model_idxs,
+                                                      imgs, labels)
+                print(e, s, jnp.mean(losses))
 
-        # check early stopping
-        if early_stopping.should_stop(validation_loss):
-            break
+            if b_idx > 3:
+                break
 
-    # close out wandb run
-    if wandb_enabled:
-        wandb.config.early_stopped = early_stopping.stopped()
-        wandb.log({'final_validation_loss': validation_loss},
-                  step=opts.epochs)
-        wandb.join()
-    else:
-        print("finished", run,
-              " early_stopping.stopped()", early_stopping.stopped(),
-              " final validation_loss", validation_loss)
+        # checkpoint model
+        ckpt_file = f"saved_models/{run}/ckpt_{e:04d}"
+        u.ensure_dir_exists_for_file(ckpt_file)
+        with open(ckpt_file, "wb") as f:
+            pickle.dump(params, f)
+
+        # run validation
+        # TODO)
+
+    # # set up checkpointing; just need more ckpts than early stopping
+    # patience
+    # ckpt_dir = "saved_models/"
+    # if opts.group:
+    #     ckpt_dir += f"{opts.group}/"
+    # else:
+    #     ckpt_dir += "no_group/"
+    # ckpt_dir += run
+    # ckpt = objax.io.Checkpoint(logdir=ckpt_dir, keep_ckpts=10)
+
+    # # close out wandb run
+    # if wandb_enabled:
+    #     wandb.config.early_stopped = early_stopping.stopped()
+    #     wandb.log({'final_validation_loss': validation_loss},
+    #               step=opts.epochs)
+    #     wandb.join()
+    # else:
+    #     print("finished", run,
+    #           " early_stopping.stopped()", early_stopping.stopped(),
+    #           " final validation_loss", validation_loss)
 
     # return validation loss to ax
-    return validation_loss
-
-
-def train_in_subprocess(opts):
-    result_queue = Queue()
-
-    def _callback(q, opts):
-        try:
-            q.put(train(opts))
-        except Exception as e:
-            print("Exception in train call", e)
-            q.put(None)
-
-    p = Process(target=_callback, args=(result_queue, opts))
-    p.daemon = True  # Q: will this fix the wandb hanging? A: nope.
-    p.start()
-
-    try:
-        timeout = 60 * 10  # 10 min
-        validation_loss = result_queue.get(timeout=timeout)
-        p.join()
-        return validation_loss
-    except Empty:
-        print("subprocess timeout", sys.stderr)
-        p.terminate()
-        return None
+    # return validation_loss
 
 
 if __name__ == '__main__':
@@ -212,19 +205,24 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--group', type=str,
-                        help='w&b init group', default=None)
-    parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--num-models', type=int, default=1)
-    parser.add_argument('--input-mode', type=str, default='single',
-                        help="whether inputs are across all models (single) or"
-                        " one input per model (multiple). inv")
+    # parser.add_argument('--group', type=str,
+    #                     help='w&b init group', default=None)
+    parser.add_argument(
+        '--seed', type=int, default=0)
+    #parser.add_argument('--num-models', type=int, default=1)
+    # parser.add_argument('--input-mode', type=str, default='single',
+    #                     help="whether inputs are across all models (single) or"
+    #                     " one input per model (multiple). inv")
     parser.add_argument('--max-conv-size', type=int, default=64)
     parser.add_argument('--dense-kernel-size', type=int, default=16)
     parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--learning-rate', type=float, default=1e-3)
     parser.add_argument('--epochs', type=int, default=2)
-    parser.add_argument('--model-dropout', action='store_true')
+    parser.add_argument('--models-per-device', type=int, default=2)
+    parser.add_argument('--steps-per-batch', type=int, default=4,
+                        help='how many steps to run, each with new random'
+                             ' dropout, per batch that is loaded')
+#    parser.add_argument('--model-dropout', action='store_true')
     opts = parser.parse_args()
     print(opts, file=sys.stderr)
 
