@@ -5,7 +5,7 @@ import time
 import data
 #from objax.functional.loss import cross_entropy_logits_sparse
 import jax.numpy as jnp
-from jax import pmap, host_id
+from jax import pmap, host_id, jit
 from jax.tree_util import tree_map
 
 

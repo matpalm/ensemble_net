@@ -20,9 +20,6 @@ import pickle
 import wandb
 import logging
 
-logging.basicConfig(format='%(asctime)s %(message)s')
-logging.getLogger().setLevel(logging.INFO)
-
 
 def softmax_cross_entropy(logits, labels):
     one_hot = jax.nn.one_hot(
@@ -59,10 +56,14 @@ def train(opts):
     num_devices = len(jax.local_devices())
     num_models = num_devices * opts.models_per_device
 
+    # we make two rngs; one that is distinct per host and one
+    # that will be common across the pod
+    host_rng = jax.random.PRNGKey(opts.seed ^ jax.host_id())
+    pod_rng = jax.random.PRNGKey(opts.seed * 2)  # o_O
+
     logging.info("init models")
-    rng = jax.random.PRNGKey(opts.seed ^ jax.host_id())
-    keys = jax.random.split(rng, num_models)
-    logging.info("model keys %s" % list(keys))
+    keys = jax.random.split(host_rng, num_models)
+    logging.debug("model keys %s" % list(keys))
     representative_input = jnp.zeros((1, 64, 64, 3))
     params = vmap(lambda k: model.init(k, representative_input))(keys)
 
@@ -134,9 +135,6 @@ def train(opts):
     # --------------------------------
     # run training loop
 
-    # generate a shuffle key that will be the same for all hosts
-    shuffle_rng = jax.random.PRNGKey(opts.seed)
-
     for epoch in range(opts.epochs):
 
         # train for one epoch
@@ -145,8 +143,9 @@ def train(opts):
         total_training_loss = 0
         training_num_examples = 0
 
-        # split out a new shuffle seed for this epoch
-        shuffle_rng, shuffle_seed = jax.random.split(shuffle_rng)
+        # split out a new shuffle seed for this epoch common
+        # across pod
+        pod_rng, shuffle_seed = jax.random.split(pod_rng)
 
         # create dataset
         train_ds = data.training_dataset(batch_size=opts.batch_size,
@@ -156,11 +155,12 @@ def train(opts):
 
         for imgs, labels in train_ds:
 
-            logging.info("labels %s" % labels)
+            logging.debug("labels %s" % labels)
 
             # replicate batch across M devices
-            imgs = u.replicate(imgs)      # (M, B, H, W, 3)
-            labels = u.replicate(labels)  # (M, B)
+            # (M, B, H, W, 3)
+            imgs = u.replicate(imgs, replicas=num_devices)
+            labels = u.replicate(labels, replicas=num_devices)  # (M, B)
 
             # run across all the 4 rotations
             # for k in range(4):
@@ -169,13 +169,16 @@ def train(opts):
             # run some steps for this set, each with a different set of
             # dropout idxs
             for _ in range(opts.steps_per_batch):
-                rng, dropout_key = jax.random.split(rng)
+                host_rng, dropout_key = jax.random.split(host_rng)
+                logging.debug("dropout_key %s" % dropout_key[0])
                 sub_model_idxs = jax.random.randint(dropout_key, minval=0,
                                                     maxval=opts.models_per_device,
                                                     shape=(num_devices,))
+                logging.debug("sub_model_idxs %s" % sub_model_idxs)
                 params, opt_states, losses = p_update(params, opt_states,
                                                       sub_model_idxs,
                                                       imgs, labels)
+                logging.debug("losses %s" % losses)
 
                 total_training_loss += jnp.sum(losses)
                 training_num_examples += len(losses)
@@ -195,7 +198,8 @@ def train(opts):
             total_validation_loss = 0
             validation_num_examples = 0
             validation_data = data.validation_dataset(
-                batch_size=opts.batch_size)
+                batch_size=opts.batch_size,
+                sample_data=opts.sample_data)
             for imgs, labels in validation_data:
                 total_validation_loss += total_ensemble_xent_loss(params, imgs,
                                                                   labels)
@@ -217,9 +221,10 @@ def train(opts):
         else:
             logging.info("finished %s final validation_loss %f" %
                          (run, mean_validation_loss))
-
-    # return validation loss to ax
-    return mean_validation_loss
+        # return validation loss to ax
+        return mean_validation_loss
+    else:
+        return None
 
 
 if __name__ == '__main__':
@@ -244,8 +249,8 @@ if __name__ == '__main__':
     # parser.add_argument('--input-mode', type=str, default='single',
     #                     help="whether inputs are across all models (single) or"
     #                     " one input per model (multiple). inv")
-    parser.add_argument('--max-conv-size', type=int, default=64)
-    parser.add_argument('--dense-kernel-size', type=int, default=16)
+    parser.add_argument('--max-conv-size', type=int, default=256)
+    parser.add_argument('--dense-kernel-size', type=int, default=32)
     parser.add_argument('--models-per-device', type=int, default=2)
     parser.add_argument('--learning-rate', type=float, default=1e-3)
     parser.add_argument('--batch-size', type=int, default=32)
@@ -253,9 +258,17 @@ if __name__ == '__main__':
                         help='how many steps to run, each with new random'
                              ' dropout, per batch that is loaded')
     parser.add_argument('--epochs', type=int, default=2)
+    parser.add_argument('--log-level', type=str, default='INFO')
     parser.add_argument('--sample-data', action='store_true',
                         help='set for running test with small training data')
     opts = parser.parse_args()
     print(opts, file=sys.stderr)
+
+    # set logging level
+    numeric_level = getattr(logging, opts.log_level.upper(), None)
+    if not isinstance(numeric_level, int):
+        raise ValueError('Invalid log level: %s' % opts.log_level)
+    logging.basicConfig(format='%(asctime)s %(message)s')
+    logging.getLogger().setLevel(numeric_level)  # logging.INFO)
 
     train(opts)

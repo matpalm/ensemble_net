@@ -48,7 +48,7 @@ def validation_dataset(batch_size, sample_data=False):
         split = 'train[80%:82%]'
     else:
         split = 'train[80%:90%]'
-    logging.info("validation_dataset %s" % split)
+    logging.debug("validation_dataset %s" % split)
     return _non_training_dataset(batch_size, split)
 
 
@@ -59,19 +59,19 @@ def test_dataset(batch_size, sample_data=False):
         split = 'train[90%:92%]'
     else:
         split = 'train[90%:]'
-    logging.info("test_dataset %s" % split)
+    logging.debug("test_dataset %s" % split)
     return _non_training_dataset(batch_size, split)
 
 
 def training_dataset(batch_size, shuffle_seed, num_inputs=1, sample_data=False):
-    logging.info("training dataset shuffle_seed %d" % shuffle_seed)
+    logging.debug("training_dataset shuffle_seed %d" % shuffle_seed)
 
     if sample_data:
         logging.warn("using small sample_data for training")
         split = 'train[:2%]'
     else:
         split = 'train[:80%]'
-    logging.info("training_dataset %s" % split)
+    logging.debug("training_dataset %s" % split)
 
     dataset = (tfds.load('eurosat/rgb', split=split,
                          as_supervised=True)
