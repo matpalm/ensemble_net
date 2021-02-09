@@ -13,10 +13,15 @@ from tqdm import tqdm
 from jax.tree_util import tree_map, tree_multimap
 import jax.numpy as jnp
 from jax.lax import psum
-from jax import vmap, value_and_grad, pmap
+from jax import vmap, value_and_grad, pmap, jit
 import models
 import data
 import pickle
+
+import logging
+
+logging.basicConfig(format='%(asctime)s %(message)s')
+logging.getLogger().setLevel(logging.INFO)
 
 
 def softmax_cross_entropy(logits, labels):
@@ -26,30 +31,9 @@ def softmax_cross_entropy(logits, labels):
 
 
 def train(opts):
-    # check --inputs and --num-models config combo. there are only three combos
-    # we support.
-    #
-    # a) --input-mode=single --num-models=1 ; single set of inputs, single model
-    #    this is the baseline non ensemble config.
-    #
-    # b) --input-mode=single --num-models=M ; single set of inputs, multiple
-    #    models single set of inputs and labels. ensemble outputs are summed at
-    #    logits to produce single output.
-    #
-    # c) --input-mode=multiple --num-models=M ; multiple inputs, multiple models
-    #    multiple inputs (with multiple labels) going through multiple models.
-    #    loss is still averaged over all models though.
-
-    # if opts.input_mode not in ['single', 'multiple']:
-    #     raise Exception("invalid --input-mode value")
-    # single_input_mode = opts.input_mode == 'single'
-    # if not single_input_mode and opts.num_models == 1:
-    #     print("--num-models must be >1 when --input-mode=multiple",
-    #           file=sys.stderr)
-    #     return None
 
     run = u.DTS()
-    print("starting run", run)
+    logging.info("starting run %s", run)
 
     # # init w & b
     # wandb_enabled = opts.group is not None
@@ -70,21 +54,19 @@ def train(opts):
     # else:
     #     print("not using wandb", file=sys.stderr)
 
-    print(">build_model")
+    logging.info("build_model")
     model = models.build_model(opts)
-    print("<build_model")
 
     num_devices = len(jax.local_devices())
     num_models = num_devices * opts.models_per_device
 
+    logging.info("init models")
     rng = jax.random.PRNGKey(opts.seed ^ jax.host_id())
-
     keys = jax.random.split(rng, num_models)
     representative_input = jnp.zeros((1, 64, 64, 3))
-    print(">init models")
     params = vmap(lambda k: model.init(k, representative_input))(keys)
 
-    print(">init opts")
+    logging.info("init optimisers")
     opt = optax.adam(opts.learning_rate)
     opt_states = vmap(opt.init)(params)
 
@@ -92,7 +74,7 @@ def train(opts):
         return u.shard(u.reshape_leading_axis(p, (num_devices,
                                                   opts.models_per_device)))
 
-    print("treemap reshape")
+    logging.info("treemap reshape params")
     params = tree_map(reshape_for_devices_and_shard, params)
     opt_states = tree_map(reshape_for_devices_and_shard, opt_states)
 
@@ -120,14 +102,43 @@ def train(opts):
         # return
         return params, opt_state, losses
 
-    print(">pmap update")
+    logging.info("compile pmap update")
     p_update = pmap(update,
                     in_axes=(0, 0, 0, 0, 0),
                     axis_name='device')
 
+    # -----------------------------------
+    # build evaluation functions
+
+    # plumb batch dimension for models_per_device
+    all_models_apply = vmap(model.apply, in_axes=(0, None))
+    # plumb batch dimension for num_devices
+    all_models_apply = vmap(all_models_apply, in_axes=(0, None))
+
+    def ensemble_logits(params, imgs):
+        logits = all_models_apply(params, imgs)
+        batch_size = logits.shape[-2]  # since last batch may be smaller
+        num_classes = 10
+        logits = logits.reshape((-1, batch_size, num_classes))  # (M, B, 10)
+        ensemble_logits = jnp.sum(logits, axis=0)               # (B, 10)
+        return ensemble_logits
+
+    @jit
+    def total_ensemble_xent_loss(params, x, y_true):
+        y_pred_logits = ensemble_logits(params, x)
+        return jnp.sum(softmax_cross_entropy(y_pred_logits, y_true))
+
+    # --------------------------------
+    # run training loop
+
     for e in range(opts.epochs):
+
         # train for one epoch
-        print(">data.training_dataset")
+        logging.info("data.training_dataset: epoch %d", e)
+
+        total_training_loss = 0
+        training_num_examples = 0
+
         train_ds = data.training_dataset(batch_size=opts.batch_size,
                                          num_inputs=1)
         for b_idx, (imgs, labels) in enumerate(train_ds):
@@ -151,10 +162,17 @@ def train(opts):
                 params, opt_states, losses = p_update(params, opt_states,
                                                       sub_model_idxs,
                                                       imgs, labels)
-                print(e, s, jnp.mean(losses))
 
-            if b_idx > 3:
-                break
+                total_training_loss += jnp.sum(losses)
+                training_num_examples += len(losses)
+
+#            print(e, s, total_training_loss / training_num_examples)
+
+#            if b_idx > 3:
+#                break
+
+        mean_training_loss = total_training_loss / training_num_examples
+        logging.info("mean training loss %f", mean_training_loss)
 
         # checkpoint model
         ckpt_file = f"saved_models/{run}/ckpt_{e:04d}"
@@ -163,7 +181,15 @@ def train(opts):
             pickle.dump(params, f)
 
         # run validation
-        # TODO)
+        total_validation_loss = 0
+        validation_num_examples = 0
+        validation_data = data.validation_dataset(batch_size=opts.batch_size)
+        for imgs, labels in validation_data:
+            total_validation_loss += total_ensemble_xent_loss(params, imgs,
+                                                              labels)
+            validation_num_examples += len(labels)
+        mean_validation_loss = total_validation_loss / validation_num_examples
+        logging.info("mean validation loss %f", mean_validation_loss)
 
     # # set up checkpointing; just need more ckpts than early stopping
     # patience
@@ -209,7 +235,7 @@ if __name__ == '__main__':
     #                     help='w&b init group', default=None)
     parser.add_argument(
         '--seed', type=int, default=0)
-    #parser.add_argument('--num-models', type=int, default=1)
+    # parser.add_argument('--num-models', type=int, default=1)
     # parser.add_argument('--input-mode', type=str, default='single',
     #                     help="whether inputs are across all models (single) or"
     #                     " one input per model (multiple). inv")
