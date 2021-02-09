@@ -28,12 +28,9 @@ all_models_apply = vmap(all_models_apply, in_axes=(0, None))
 
 num_classes = 10
 
-# TODO: move this into util so can run during training too
-#       ( as well as being run against validation and test )
-
-
+# convert to a prediction function that ensembles over all models
 @jit
-def predict(params, imgs):
+def predict_fn(imgs):
     logits = all_models_apply(params, imgs)
     batch_size = logits.shape[-2]
     logits = logits.reshape((-1, batch_size, num_classes))  # (M, B, 10)
@@ -42,24 +39,10 @@ def predict(params, imgs):
     return predictions
 
 
-num_correct = 0
-num_total = 0
-dataset = data.validation_dataset(batch_size=64)
-for imgs, labels in dataset:
-    predictions = predict(params, imgs)
-    num_correct += jnp.sum(predictions == labels)
-    num_total += len(labels)
+# check against validation set
+accuracy = util.accuracy(predict_fn, data.validation_dataset(batch_size=128))
+print("validation accuracy %0.3f" % accuracy)
 
-accuracy = num_correct / num_total
-print(num_correct, num_total)
-
-# # restore from save
-# objax.io.load_var_collection(opts.saved_model, net.vars())
-
-# # check against validation set
-# accuracy = util.accuracy(net, data.validation_dataset(batch_size=128))
-# print("validation accuracy %0.3f" % accuracy)
-
-# # check against test set
-# accuracy = util.accuracy(net, data.test_dataset(batch_size=128))
-# print("test accuracy %0.3f" % accuracy)
+# check against test set
+accuracy = util.accuracy(predict_fn, data.test_dataset(batch_size=128))
+print("test accuracy %0.3f" % accuracy)

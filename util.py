@@ -122,13 +122,12 @@ class EarlyStopping(object):
 #     return float(losses_total / num_losses)
 
 
-def accuracy(net, dataset):
-    # TODO: could go to NonEnsembleNet/EnsembleNet base class
-    y_pred = []
-    y_true = []
+def accuracy(predict_fn, dataset):
+    num_correct = 0
+    num_total = 0
     for imgs, labels in dataset:
-        y_pred.extend(net.predict(imgs, single_result=True))
-        y_true.extend(labels)
-    num_correct = np.equal(y_pred, y_true).sum()
-    num_total = len(y_pred)
-    return float(num_correct / num_total)
+        predictions = predict_fn(imgs)
+        num_correct += jnp.sum(predictions == labels)
+        num_total += len(labels)
+    accuracy = num_correct / num_total
+    return accuracy
