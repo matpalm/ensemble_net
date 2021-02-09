@@ -1,6 +1,6 @@
 tensorflow-gpu
 tensorflow-datasets
 jax
-objax
+haiku
 wandb
 ax-platform

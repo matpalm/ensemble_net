@@ -3,26 +3,7 @@
 ensemble nets are a single pass way of representing M models in a neural
 net ensemble. see this [blog post](http://matpalm.com/blog/ensemble_nets)
 
+note: blog post was based on a vmap version run on my local single GPU machine.
+the code for this first version is under tag v1.
 
-```
-# to reproduce the base line tuning
-python3 tune_with_ax.py --mode siso
-```
-
-```
-# to reproduce the single_input case
-python3 tune_with_ax.py --mode simo
-```
-
-```
-# to reproduce the multi_input case
-python3 tune_with_ax.py --mode mimo
-```
-
-```
-# to reproduce the single_input case with logit dropout
-python3 tune_with_ax.py --mode simo_ld
-```
-
-see the notebooks under the blog/ folder to reproduce additional
-figures in the blog post
+the code as is now is a port of the model to run on a pod tpu slice using haiku
