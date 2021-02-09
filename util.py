@@ -5,7 +5,7 @@ import time
 import data
 #from objax.functional.loss import cross_entropy_logits_sparse
 import jax.numpy as jnp
-from jax import pmap
+from jax import pmap, host_id
 from jax.tree_util import tree_map
 
 
@@ -40,6 +40,10 @@ def shapes_of(pytree):
 
 def reshape_leading_axis(x, s, from_axis=1):
     return x.reshape((*s, *x.shape[from_axis:]))
+
+
+def primary_host():
+    return host_id() == 0
 
 
 class EarlyStopping(object):

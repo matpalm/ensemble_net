@@ -37,7 +37,7 @@ def train(opts):
 
     # # init w & b
     wandb_enabled = opts.group is not None
-    if wandb_enabled:
+    if wandb_enabled and u.primary_host():
         wandb.init(project='ensemble_net', group=opts.group, name=run,
                    reinit=True)
         # save group again explicitly to work around sync bug that drops
@@ -51,7 +51,7 @@ def train(opts):
         wandb.config.batch_size = opts.batch_size
         wandb.config.steps_per_batch = opts.steps_per_batch
     else:
-        logging.info("not using wandb")
+        logging.info("not using wandb and/or not primary host")
 
     logging.info("build_model")
     model = models.build_model(opts)
@@ -62,6 +62,7 @@ def train(opts):
     logging.info("init models")
     rng = jax.random.PRNGKey(opts.seed ^ jax.host_id())
     keys = jax.random.split(rng, num_models)
+    logging.info("model keys %s" % list(keys))
     representative_input = jnp.zeros((1, 64, 64, 3))
     params = vmap(lambda k: model.init(k, representative_input))(keys)
 
@@ -133,6 +134,9 @@ def train(opts):
     # --------------------------------
     # run training loop
 
+    # generate a shuffle key that will be the same for all hosts
+    shuffle_rng = jax.random.PRNGKey(opts.seed)
+
     for epoch in range(opts.epochs):
 
         # train for one epoch
@@ -141,13 +145,18 @@ def train(opts):
         total_training_loss = 0
         training_num_examples = 0
 
+        # split out a new shuffle seed for this epoch
+        shuffle_rng, shuffle_seed = jax.random.split(shuffle_rng)
+
+        # create dataset
         train_ds = data.training_dataset(batch_size=opts.batch_size,
+                                         shuffle_seed=shuffle_seed[0],
                                          num_inputs=1,
                                          sample_data=opts.sample_data)
+
         for imgs, labels in train_ds:
             # replicate batch across M devices
-            # (M, B, H, W, 3)
-            imgs = u.replicate(imgs)
+            imgs = u.replicate(imgs)      # (M, B, H, W, 3)
             labels = u.replicate(labels)  # (M, B)
 
             # run across all the 4 rotations
@@ -157,8 +166,7 @@ def train(opts):
             # run some steps for this set, each with a different set of
             # dropout idxs
             for _ in range(opts.steps_per_batch):
-                rng, dropout_key = jax.random.split(
-                    rng)
+                rng, dropout_key = jax.random.split(rng)
                 sub_model_idxs = jax.random.randint(dropout_key, minval=0,
                                                     maxval=opts.models_per_device,
                                                     shape=(num_devices,))
@@ -172,40 +180,33 @@ def train(opts):
         mean_training_loss = float(total_training_loss / training_num_examples)
         logging.info("mean training loss %f", mean_training_loss)
 
-        # checkpoint model
-        ckpt_file = f"saved_models/{run}/ckpt_{epoch:04d}"
-        u.ensure_dir_exists_for_file(ckpt_file)
-        with open(ckpt_file, "wb") as f:
-            pickle.dump(params, f)
+        # post epoch stats collection and housekeeping on primary host only
+        if u.primary_host():
+            # checkpoint model
+            ckpt_file = f"saved_models/{run}/ckpt_{epoch:04d}"
+            u.ensure_dir_exists_for_file(ckpt_file)
+            with open(ckpt_file, "wb") as f:
+                pickle.dump(params, f)
 
-        # run validation
-        total_validation_loss = 0
-        validation_num_examples = 0
-        validation_data = data.validation_dataset(batch_size=opts.batch_size)
-        for imgs, labels in validation_data:
-            total_validation_loss += total_ensemble_xent_loss(params, imgs,
-                                                              labels)
-            validation_num_examples += len(labels)
-        mean_validation_loss = float(
-            total_validation_loss / validation_num_examples)
-        logging.info("mean validation loss %f", mean_validation_loss)
+            # run validation
+            total_validation_loss = 0
+            validation_num_examples = 0
+            validation_data = data.validation_dataset(
+                batch_size=opts.batch_size)
+            for imgs, labels in validation_data:
+                total_validation_loss += total_ensemble_xent_loss(params, imgs,
+                                                                  labels)
+                validation_num_examples += len(labels)
+            mean_validation_loss = float(
+                total_validation_loss / validation_num_examples)
+            logging.info("mean validation loss %f", mean_validation_loss)
 
-        if wandb_enabled:
-            wandb.log({'training_loss': mean_training_loss}, step=epoch)
-            wandb.log({'validation_loss': mean_validation_loss}, step=epoch)
-
-    # # set up checkpointing; just need more ckpts than early stopping
-    # patience
-    # ckpt_dir = "saved_models/"
-    # if opts.group:
-    #     ckpt_dir += f"{opts.group}/"
-    # else:
-    #     ckpt_dir += "no_group/"
-    # ckpt_dir += run
-    # ckpt = objax.io.Checkpoint(logdir=ckpt_dir, keep_ckpts=10)
+            if wandb_enabled:
+                wandb.log({'training_loss': mean_training_loss}, step=epoch)
+                wandb.log({'validation_loss': mean_validation_loss}, step=epoch)
 
     # close out wandb run
-    if wandb_enabled:
+    if wandb_enabled and u.primary_host():
         wandb.log({'final_validation_loss': mean_validation_loss},
                   step=opts.epochs)
         wandb.join()
