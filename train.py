@@ -155,6 +155,9 @@ def train(opts):
                                          sample_data=opts.sample_data)
 
         for imgs, labels in train_ds:
+
+            logging.info("labels %s" % labels)
+
             # replicate batch across M devices
             imgs = u.replicate(imgs)      # (M, B, H, W, 3)
             labels = u.replicate(labels)  # (M, B)
@@ -206,13 +209,14 @@ def train(opts):
                 wandb.log({'validation_loss': mean_validation_loss}, step=epoch)
 
     # close out wandb run
-    if wandb_enabled and u.primary_host():
-        wandb.log({'final_validation_loss': mean_validation_loss},
-                  step=opts.epochs)
-        wandb.join()
-    else:
-        logging.info("finished %s final validation_loss %f" %
-                     (run, mean_validation_loss))
+    if u.primary_host():
+        if wandb_enabled:
+            wandb.log({'final_validation_loss': mean_validation_loss},
+                      step=opts.epochs)
+            wandb.join()
+        else:
+            logging.info("finished %s final validation_loss %f" %
+                         (run, mean_validation_loss))
 
     # return validation loss to ax
     return mean_validation_loss
