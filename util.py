@@ -114,18 +114,6 @@ class EarlyStopping(object):
         return self.decided_to_stop
 
 
-# def mean_loss(net, dataset):
-#     # TODO: could go to NonEnsembleNet/EnsembleNet base class
-#     losses_total = 0
-#     num_losses = 0
-#     for imgs, labels in dataset:
-#         logits = net.logits(imgs, single_result=True, model_dropout=False)
-#         losses = cross_entropy_logits_sparse(logits, labels)
-#         losses_total += jnp.sum(losses)
-#         num_losses += len(losses)
-#     return float(losses_total / num_losses)
-
-
 def accuracy(predict_fn, dataset):
     num_correct = 0
     num_total = 0

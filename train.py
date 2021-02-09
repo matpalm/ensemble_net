@@ -245,10 +245,6 @@ if __name__ == '__main__':
     parser.add_argument('--group', type=str,
                         help='w&b init group', default=None)
     parser.add_argument('--seed', type=int, default=0)
-    # parser.add_argument('--num-models', type=int, default=1)
-    # parser.add_argument('--input-mode', type=str, default='single',
-    #                     help="whether inputs are across all models (single) or"
-    #                     " one input per model (multiple). inv")
     parser.add_argument('--max-conv-size', type=int, default=256)
     parser.add_argument('--dense-kernel-size', type=int, default=32)
     parser.add_argument('--models-per-device', type=int, default=2)

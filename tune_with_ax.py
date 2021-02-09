@@ -9,6 +9,8 @@ import random
 import json
 import tensorflow as tf
 
+raise Exception("need to port to pod version")
+
 # tf.config.experimental.set_visible_devices([], "GPU")
 
 parser = argparse.ArgumentParser(
@@ -18,7 +20,7 @@ parser.add_argument('--group', type=str, default=None,
 parser.add_argument('--mode', type=str, required=True,
                     help='mode; one of siso, simo, simo_ld or mimo')
 parser.add_argument('--num-models', type=int, default=1)
-parser.add_argument('--run-time-sec', type=int, default=60*10)
+parser.add_argument('--run-time-sec', type=int, default=60 * 10)
 parser.add_argument('--epochs', type=int, default=60)
 
 cmd_line_opts = parser.parse_args()
