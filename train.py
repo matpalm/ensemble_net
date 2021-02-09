@@ -17,7 +17,7 @@ from jax import vmap, value_and_grad, pmap, jit
 import models
 import data
 import pickle
-
+import wandb
 import logging
 
 logging.basicConfig(format='%(asctime)s %(message)s')
@@ -36,23 +36,22 @@ def train(opts):
     logging.info("starting run %s", run)
 
     # # init w & b
-    # wandb_enabled = opts.group is not None
-    # if wandb_enabled:
-    #     wandb.init(project='ensemble_net', group=opts.group, name=run,
-    #                reinit=True)
-    #     # save group again explicitly to work around sync bug that drops
-    #     # group when 'wandb off'
-    #     wandb.config.group = opts.group
-    #     wandb.config.input_mode = opts.input_mode
-    #     wandb.config.num_models = opts.num_models
-    #     wandb.config.max_conv_size = opts.max_conv_size
-    #     wandb.config.dense_kernel_size = opts.dense_kernel_size
-    #     wandb.config.seed = opts.seed
-    #     wandb.config.learning_rate = opts.learning_rate
-    #     wandb.config.batch_size = opts.batch_size
-    #     wandb.config.model_dropout = opts.model_dropout
-    # else:
-    #     print("not using wandb", file=sys.stderr)
+    wandb_enabled = opts.group is not None
+    if wandb_enabled:
+        wandb.init(project='ensemble_net', group=opts.group, name=run,
+                   reinit=True)
+        # save group again explicitly to work around sync bug that drops
+        # group when 'wandb off'
+        wandb.config.group = opts.group
+        wandb.config.seed = opts.seed
+        wandb.config.max_conv_size = opts.max_conv_size
+        wandb.config.dense_kernel_size = opts.dense_kernel_size
+        wandb.config.models_per_device = opts.models_per_device
+        wandb.config.learning_rate = opts.learning_rate
+        wandb.config.batch_size = opts.batch_size
+        wandb.config.steps_per_batch = opts.steps_per_batch
+    else:
+        logging.info("not using wandb")
 
     logging.info("build_model")
     model = models.build_model(opts)
@@ -77,6 +76,9 @@ def train(opts):
     logging.info("treemap reshape params")
     params = tree_map(reshape_for_devices_and_shard, params)
     opt_states = tree_map(reshape_for_devices_and_shard, opt_states)
+
+    # -----------------------------------
+    # prepare loss / training functions
 
     def mean_ensemble_xent(params, x, y_true):
         logits = model.apply(params, x)
@@ -108,7 +110,7 @@ def train(opts):
                     axis_name='device')
 
     # -----------------------------------
-    # build evaluation functions
+    # prepare evaluation functions
 
     # plumb batch dimension for models_per_device
     all_models_apply = vmap(model.apply, in_axes=(0, None))
@@ -131,17 +133,18 @@ def train(opts):
     # --------------------------------
     # run training loop
 
-    for e in range(opts.epochs):
+    for epoch in range(opts.epochs):
 
         # train for one epoch
-        logging.info("data.training_dataset: epoch %d", e)
+        logging.info("data.training_dataset: epoch %d", epoch)
 
         total_training_loss = 0
         training_num_examples = 0
 
         train_ds = data.training_dataset(batch_size=opts.batch_size,
-                                         num_inputs=1)
-        for b_idx, (imgs, labels) in enumerate(train_ds):
+                                         num_inputs=1,
+                                         sample_data=opts.sample_data)
+        for imgs, labels in train_ds:
             # replicate batch across M devices
             # (M, B, H, W, 3)
             imgs = u.replicate(imgs)
@@ -153,7 +156,7 @@ def train(opts):
 
             # run some steps for this set, each with a different set of
             # dropout idxs
-            for s in range(opts.steps_per_batch):
+            for _ in range(opts.steps_per_batch):
                 rng, dropout_key = jax.random.split(
                     rng)
                 sub_model_idxs = jax.random.randint(dropout_key, minval=0,
@@ -166,16 +169,11 @@ def train(opts):
                 total_training_loss += jnp.sum(losses)
                 training_num_examples += len(losses)
 
-#            print(e, s, total_training_loss / training_num_examples)
-
-#            if b_idx > 3:
-#                break
-
-        mean_training_loss = total_training_loss / training_num_examples
+        mean_training_loss = float(total_training_loss / training_num_examples)
         logging.info("mean training loss %f", mean_training_loss)
 
         # checkpoint model
-        ckpt_file = f"saved_models/{run}/ckpt_{e:04d}"
+        ckpt_file = f"saved_models/{run}/ckpt_{epoch:04d}"
         u.ensure_dir_exists_for_file(ckpt_file)
         with open(ckpt_file, "wb") as f:
             pickle.dump(params, f)
@@ -188,8 +186,13 @@ def train(opts):
             total_validation_loss += total_ensemble_xent_loss(params, imgs,
                                                               labels)
             validation_num_examples += len(labels)
-        mean_validation_loss = total_validation_loss / validation_num_examples
+        mean_validation_loss = float(
+            total_validation_loss / validation_num_examples)
         logging.info("mean validation loss %f", mean_validation_loss)
+
+        if wandb_enabled:
+            wandb.log({'training_loss': mean_training_loss}, step=epoch)
+            wandb.log({'validation_loss': mean_validation_loss}, step=epoch)
 
     # # set up checkpointing; just need more ckpts than early stopping
     # patience
@@ -201,19 +204,17 @@ def train(opts):
     # ckpt_dir += run
     # ckpt = objax.io.Checkpoint(logdir=ckpt_dir, keep_ckpts=10)
 
-    # # close out wandb run
-    # if wandb_enabled:
-    #     wandb.config.early_stopped = early_stopping.stopped()
-    #     wandb.log({'final_validation_loss': validation_loss},
-    #               step=opts.epochs)
-    #     wandb.join()
-    # else:
-    #     print("finished", run,
-    #           " early_stopping.stopped()", early_stopping.stopped(),
-    #           " final validation_loss", validation_loss)
+    # close out wandb run
+    if wandb_enabled:
+        wandb.log({'final_validation_loss': mean_validation_loss},
+                  step=opts.epochs)
+        wandb.join()
+    else:
+        logging.info("finished %s final validation_loss %f" %
+                     (run, mean_validation_loss))
 
     # return validation loss to ax
-    # return validation_loss
+    return mean_validation_loss
 
 
 if __name__ == '__main__':
@@ -231,24 +232,24 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    # parser.add_argument('--group', type=str,
-    #                     help='w&b init group', default=None)
-    parser.add_argument(
-        '--seed', type=int, default=0)
+    parser.add_argument('--group', type=str,
+                        help='w&b init group', default=None)
+    parser.add_argument('--seed', type=int, default=0)
     # parser.add_argument('--num-models', type=int, default=1)
     # parser.add_argument('--input-mode', type=str, default='single',
     #                     help="whether inputs are across all models (single) or"
     #                     " one input per model (multiple). inv")
     parser.add_argument('--max-conv-size', type=int, default=64)
     parser.add_argument('--dense-kernel-size', type=int, default=16)
-    parser.add_argument('--batch-size', type=int, default=32)
-    parser.add_argument('--learning-rate', type=float, default=1e-3)
-    parser.add_argument('--epochs', type=int, default=2)
     parser.add_argument('--models-per-device', type=int, default=2)
+    parser.add_argument('--learning-rate', type=float, default=1e-3)
+    parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--steps-per-batch', type=int, default=4,
                         help='how many steps to run, each with new random'
                              ' dropout, per batch that is loaded')
-#    parser.add_argument('--model-dropout', action='store_true')
+    parser.add_argument('--epochs', type=int, default=2)
+    parser.add_argument('--sample-data', action='store_true',
+                        help='set for running test with small training data')
     opts = parser.parse_args()
     print(opts, file=sys.stderr)
 

@@ -4,6 +4,7 @@ from functools import lru_cache
 import numpy as np
 import jax.numpy as jnp
 from tensorflow.data.experimental import AUTOTUNE
+import logging
 
 
 def _convert_dtype(x):
@@ -52,8 +53,15 @@ def test_dataset(batch_size):
     return _non_training_dataset(batch_size, 'train[90%:]')
 
 
-def training_dataset(batch_size, num_inputs=1):
-    dataset = (tfds.load('eurosat/rgb', split='train[:80%]',
+def training_dataset(batch_size, num_inputs=1, sample_data=False):
+
+    if sample_data:
+        logging.warn("using small sample_data for training")
+        split = 'train[:5%]'
+    else:
+        split = 'train[:80%]'
+
+    dataset = (tfds.load('eurosat/rgb', split=split,
                          as_supervised=True)
                .map(_augment_and_convert_dtype, num_parallel_calls=AUTOTUNE)
                .shuffle(1024))
