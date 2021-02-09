@@ -3,8 +3,10 @@ import numpy as np
 import datetime
 import time
 import data
-from objax.functional.loss import cross_entropy_logits_sparse
+#from objax.functional.loss import cross_entropy_logits_sparse
 import jax.numpy as jnp
+from jax import pmap, host_id, jit
+from jax.tree_util import tree_map
 
 
 def DTS():
@@ -18,6 +20,30 @@ def ensure_dir_exists(directory):
 
 def ensure_dir_exists_for_file(fname):
     ensure_dir_exists(os.path.dirname(fname))
+
+
+def shard(x):
+    # pmap x across first axis
+    return pmap(lambda v: v)(x)
+
+
+def replicate(x, replicas=8):
+    # replicate x and then shard
+    replicated = jnp.stack([x] * replicas)
+    return shard(replicated)
+
+
+def shapes_of(pytree):
+    # rebuild a pytree swapping actual params for just shape and type
+    return tree_map(lambda v: (v.shape, type(v)), pytree)
+
+
+def reshape_leading_axis(x, s, from_axis=1):
+    return x.reshape((*s, *x.shape[from_axis:]))
+
+
+def primary_host():
+    return host_id() == 0
 
 
 class EarlyStopping(object):
@@ -88,25 +114,12 @@ class EarlyStopping(object):
         return self.decided_to_stop
 
 
-def mean_loss(net, dataset):
-    # TODO: could go to NonEnsembleNet/EnsembleNet base class
-    losses_total = 0
-    num_losses = 0
+def accuracy(predict_fn, dataset):
+    num_correct = 0
+    num_total = 0
     for imgs, labels in dataset:
-        logits = net.logits(imgs, single_result=True, model_dropout=False)
-        losses = cross_entropy_logits_sparse(logits, labels)
-        losses_total += jnp.sum(losses)
-        num_losses += len(losses)
-    return float(losses_total / num_losses)
-
-
-def accuracy(net, dataset):
-    # TODO: could go to NonEnsembleNet/EnsembleNet base class
-    y_pred = []
-    y_true = []
-    for imgs, labels in dataset:
-        y_pred.extend(net.predict(imgs, single_result=True))
-        y_true.extend(labels)
-    num_correct = np.equal(y_pred, y_true).sum()
-    num_total = len(y_pred)
-    return float(num_correct / num_total)
+        predictions = predict_fn(imgs)
+        num_correct += jnp.sum(predictions == labels)
+        num_total += len(labels)
+    accuracy = num_correct / num_total
+    return accuracy

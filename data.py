@@ -4,6 +4,7 @@ from functools import lru_cache
 import numpy as np
 import jax.numpy as jnp
 from tensorflow.data.experimental import AUTOTUNE
+import logging
 
 
 def _convert_dtype(x):
@@ -40,27 +41,47 @@ def _non_training_dataset(batch_size, ds_split):
     return tfds.as_numpy(dataset)
 
 
-def validation_dataset(batch_size):
+def validation_dataset(batch_size, sample_data=False):
     # 2700 records
     # [293, 307, 335, 258, 253, 194, 239, 284, 243, 294]
-    return _non_training_dataset(batch_size, 'train[80%:90%]')
+    if sample_data:
+        split = 'train[80%:82%]'
+    else:
+        split = 'train[80%:90%]'
+    logging.debug("validation_dataset %s" % split)
+    return _non_training_dataset(batch_size, split)
 
 
-def test_dataset(batch_size):
+def test_dataset(batch_size, sample_data=False):
     # 2700 records
     # [307, 300, 296, 221, 262, 216, 251, 296, 250, 301]
-    return _non_training_dataset(batch_size, 'train[90%:]')
+    if sample_data:
+        split = 'train[90%:92%]'
+    else:
+        split = 'train[90%:]'
+    logging.debug("test_dataset %s" % split)
+    return _non_training_dataset(batch_size, split)
 
 
-def training_dataset(batch_size, num_inputs=1):
-    dataset = (tfds.load('eurosat/rgb', split='train[:80%]',
+def training_dataset(batch_size, shuffle_seed, num_inputs=1, sample_data=False):
+    logging.debug("training_dataset shuffle_seed %d" % shuffle_seed)
+
+    if sample_data:
+        logging.warn("using small sample_data for training")
+        split = 'train[:2%]'
+    else:
+        split = 'train[:80%]'
+    logging.debug("training_dataset %s" % split)
+
+    dataset = (tfds.load('eurosat/rgb', split=split,
                          as_supervised=True)
                .map(_augment_and_convert_dtype, num_parallel_calls=AUTOTUNE)
-               .shuffle(1024))
+               .shuffle(1024, seed=shuffle_seed))
 
     if num_inputs == 1:
         dataset = dataset.batch(batch_size)
     else:
+        # TODO: don't use this in v2?
         @tf.autograph.experimental.do_not_convert
         def _reshape_inputs(x, y):
             _b, h, w, c = x.shape
